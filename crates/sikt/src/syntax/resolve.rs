@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use super::ast::{Ast, Expr, ExprKind, Span};
-use super::parser::{Parsed, RESERVED, Rule, VOCABULARY};
+use super::parser::{Parsed, Rule, VOCABULARY};
 use crate::class::Kind;
 use crate::error::Error;
 
@@ -228,12 +228,15 @@ fn unknown_word<'a>(
 /// The closest known word or rule name within a small edit distance.
 fn suggest<'a>(word: &str, rules: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let kinds = Kind::ALL.iter().map(|k| k.name());
-    VOCABULARY
-        .iter()
-        .copied()
-        .chain(kinds)
-        .chain(rules)
-        .filter(|candidate| !RESERVED.contains(candidate))
+    suggest_from(word, VOCABULARY.iter().copied().chain(kinds).chain(rules))
+}
+
+/// The candidate closest to `word` within a small edit distance.
+pub(crate) fn suggest_from<'a>(
+    word: &str,
+    candidates: impl Iterator<Item = &'a str>,
+) -> Option<&'a str> {
+    candidates
         .map(|candidate| (edit_distance(word, candidate), candidate))
         .filter(|&(d, _)| d <= 2 && d < word.chars().count())
         .min_by_key(|&(d, _)| d)

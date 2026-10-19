@@ -4,13 +4,17 @@
 //! or the expected compile `error`. A match is its text, or a table with
 //! `text`, `at` (byte offset), `captures` and `absent` (captures that didn't
 //! participate). A capture given as a list checks every occurrence.
+//!
+//! With `replace`, the case checks the `output` of replacing every match with
+//! that template, or the expected `template_error`. `warnings` lists the
+//! expected warning messages.
 
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
-use sikt::Pattern;
+use sikt::{Pattern, Template};
 
 #[derive(Deserialize)]
 struct File {
@@ -30,6 +34,9 @@ struct Case {
     max_steps: Option<u64>,
     max_depth: Option<u32>,
     warnings: Option<Vec<String>>,
+    replace: Option<String>,
+    output: Option<String>,
+    template_error: Option<String>,
     #[serde(default)]
     case_insensitive: bool,
     match_error: Option<String>,
@@ -120,6 +127,27 @@ fn run(case: &Case) -> Result<(), Failed> {
             .into());
         }
     }
+    if let Some(source) = &case.replace {
+        let template = Template::new(source, &pattern);
+        if let Some(expected) = &case.template_error {
+            let error = template.err().ok_or("expected a template error")?;
+            check("template error", error.message(), expected)?;
+            if let Some(label) = &case.label {
+                check("label", error.label().unwrap_or(""), label)?;
+            }
+            return Ok(());
+        }
+        let template = template.map_err(|e| format!("{:?}", miette::Report::new(e)))?;
+        let output = pattern
+            .replace_all(&case.input, &template)
+            .map_err(|e| e.to_string())?;
+        let expected = case
+            .output
+            .as_deref()
+            .ok_or("case with `replace` needs `output`")?;
+        return check("output", &output, expected);
+    }
+
     let mut found = Vec::new();
     for result in pattern.find_iter(&case.input) {
         match result {

@@ -1,0 +1,124 @@
+# Replacement templates. `replace` is the template, `output` the text after
+# replacing every match.
+
+[[case]]
+name = "captures by name"
+pattern = 'year: 4 digit "-" month: 2 digit "-" day: 2 digit'
+replace = "{day}/{month}/{year}"
+input = "on 2026-10-19."
+output = "on 19/10/2026."
+
+[[case]]
+name = "whole match"
+pattern = '1+ digit'
+replace = "<{match}>"
+input = "a1b22"
+output = "a<1>b<22>"
+
+[[case]]
+name = "upper and lower"
+pattern = 'w: 1+ letter'
+replace = "{w | upper}{w | lower}"
+input = "Ab cD"
+output = "ABab CDcd"
+
+[[case]]
+name = "trim and len"
+pattern = '"[" v: until "]" "]"'
+replace = "{v | trim}:{v | len}"
+input = "[ ab ] [é]"
+output = "ab:4 é:1"
+
+[[case]]
+name = "filters chain"
+pattern = '"[" v: until "]" "]"'
+replace = "{v | trim | upper}"
+input = "[ ab ]"
+output = "AB"
+
+[[case]]
+name = "default for a capture that didn't participate"
+pattern = '"a" optional (b: "b")'
+replace = "[{b | default 'none'}]"
+input = "a ab"
+output = "[none] [b]"
+
+[[case]]
+name = "default with double quotes"
+pattern = '"a" optional (b: "b")'
+replace = '[{b | default "-"}]'
+input = "a"
+output = "[-]"
+
+[[case]]
+name = "missing capture is empty"
+pattern = '"a" optional (b: "b")'
+replace = "[{b}]"
+input = "a"
+output = "[]"
+
+[[case]]
+name = "literal braces"
+pattern = 'n: 1+ digit'
+replace = "{{{n}}}"
+input = "x1"
+output = "x{1}"
+
+[[case]]
+name = "no match leaves the text alone"
+pattern = '"z"'
+replace = "y"
+input = "abc"
+output = "abc"
+
+[[case]]
+name = "empty matches"
+pattern = '""'
+replace = "-"
+input = "ab"
+output = "-a-b-"
+
+[[case]]
+name = "last occurrence of a repeated capture"
+pattern = '1+ (d: digit)'
+replace = "{d}"
+input = "123 45"
+output = "3 5"
+
+[[case]]
+name = "error: unknown capture"
+pattern = 'year: 4 digit'
+replace = "{yeer}"
+template_error = "unknown capture `yeer`"
+label = "did you mean `year`?"
+
+[[case]]
+name = "error: unknown filter"
+pattern = 'w: 1+ letter'
+replace = "{w | lowr}"
+template_error = "unknown filter `lowr`"
+label = "did you mean `lower`?"
+
+[[case]]
+name = "error: unclosed brace"
+pattern = 'w: 1+ letter'
+replace = "a {w"
+template_error = "unclosed `{`"
+
+[[case]]
+name = "error: lone closing brace"
+pattern = 'w: 1+ letter'
+replace = "a } b"
+template_error = "unmatched `}`"
+
+[[case]]
+name = "error: empty braces"
+pattern = 'w: 1+ letter'
+replace = "{}"
+template_error = "empty `{}`"
+
+[[case]]
+name = "error: default needs a string"
+pattern = 'w: 1+ letter'
+replace = "{w | default}"
+template_error = "`default` needs a string"

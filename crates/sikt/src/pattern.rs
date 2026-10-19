@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::ops::Range;
 
@@ -7,6 +8,7 @@ use crate::error::{Error, MatchError, Warning};
 use crate::lint::lint;
 use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::syntax::parse;
+use crate::template::Template;
 use crate::vm::{self, CaptureEvent, Limits, Scratch};
 
 const DEFAULT_LIMITS: Limits = Limits {
@@ -110,6 +112,38 @@ impl Pattern {
     /// The first match, scanning left to right.
     pub fn find<'a>(&'a self, text: &'a str) -> Result<Option<Match<'a>>, MatchError> {
         self.find_iter(text).next().transpose()
+    }
+
+    /// The text with every match replaced by `template`.
+    pub fn replace_all<'a>(
+        &self,
+        text: &'a str,
+        template: &Template,
+    ) -> Result<Cow<'a, str>, MatchError> {
+        self.replace_all_with(text, |m, out| template.render_into(m, out))
+    }
+
+    /// The text with every match replaced by what `replace` writes for it.
+    pub fn replace_all_with<'a>(
+        &self,
+        text: &'a str,
+        mut replace: impl FnMut(&Match, &mut String),
+    ) -> Result<Cow<'a, str>, MatchError> {
+        let mut out = String::new();
+        let mut last = 0;
+        let mut replaced = false;
+        for m in self.find_iter(text) {
+            let m = m?;
+            out.push_str(&text[last..m.start()]);
+            replace(&m, &mut out);
+            last = m.end();
+            replaced = true;
+        }
+        if !replaced {
+            return Ok(Cow::Borrowed(text));
+        }
+        out.push_str(&text[last..]);
+        Ok(Cow::Owned(out))
     }
 
     /// All non-overlapping matches, left to right. After an empty match the
@@ -355,6 +389,13 @@ mod tests {
             let Ok(p) = Pattern::new(&src) else { return Ok(()) };
             let fast: Vec<_> = p.find_iter(&input).map(|m| m.unwrap().range()).collect();
             prop_assert_eq!(fast, naive(&p, &input), "pattern `{}`", src);
+        }
+
+        #[test]
+        fn replacing_with_the_match_changes_nothing(src in pattern(), input in "[ab12x\\- é\n]{0,24}") {
+            let Ok(p) = Pattern::new(&src) else { return Ok(()) };
+            let template = Template::new("{match}", &p).unwrap();
+            prop_assert_eq!(p.replace_all(&input, &template).unwrap(), input.as_str());
         }
     }
 }

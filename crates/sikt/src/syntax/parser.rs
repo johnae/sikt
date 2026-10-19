@@ -4,7 +4,7 @@ use crate::class::{CharSet, Kind};
 use crate::error::Error;
 
 /// Words held back for features planned after v1.
-pub(super) const RESERVED: &[&str] = &[
+const RESERVED: &[&str] = &[
     "at", "grammar", "infix", "recover", "skip", "use", "longest",
 ];
 
