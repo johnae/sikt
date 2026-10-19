@@ -16,10 +16,11 @@
 mod class;
 mod compile;
 mod error;
+mod lint;
 mod pattern;
 mod prefilter;
 mod syntax;
 mod vm;
 
-pub use error::{Error, MatchError};
+pub use error::{Error, MatchError, Warning};
 pub use pattern::{FindIter, Match, Pattern, PatternBuilder};

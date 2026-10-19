@@ -52,3 +52,21 @@ fn left_recursion() {
 fn unknown_rule() {
     insta::assert_snapshot!(render("let octet = 1..3 digit\nfind octet \".\" octt"));
 }
+
+fn render_warnings(src: &str) -> String {
+    let pattern = Pattern::new(src).expect("pattern should compile");
+    let mut out = String::new();
+    for warning in pattern.warnings() {
+        GraphicalReportHandler::new_themed(GraphicalTheme::unicode_nocolor())
+            .render_report(&mut out, warning)
+            .unwrap();
+    }
+    out
+}
+
+#[test]
+fn warnings() {
+    insta::assert_snapshot!(render_warnings(
+        "let unused = \"x\"\nfind 0+ any \"x\" or \"<\" until \">\" or newline"
+    ));
+}

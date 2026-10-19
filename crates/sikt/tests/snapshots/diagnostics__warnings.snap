@@ -1,0 +1,25 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render_warnings(\"let unused = \\\"x\\\"\\nfind 0+ any \\\"x\\\" or \\\"<\\\" until \\\">\\\" or newline\")"
+---
+  ⚠ `until` applies only to `">"` here, not to the whole `or`
+   ╭─[pattern:2:24]
+ 1 │ let unused = "x"
+ 2 │ find 0+ any "x" or "<" until ">" or newline
+   ·                        ─────────
+   ╰────
+  help: to stop at any of the options, write `until (">" or newline)`
+  ⚠ `0+ any` takes everything, so `"x"` can never match after it
+   ╭─[pattern:2:13]
+ 1 │ let unused = "x"
+ 2 │ find 0+ any "x" or "<" until ">" or newline
+   ·             ───
+   ╰────
+  help: use `until "x"` to match up to it
+  ⚠ rule `unused` is never used
+   ╭─[pattern:1:5]
+ 1 │ let unused = "x"
+   ·     ──────
+ 2 │ find 0+ any "x" or "<" until ">" or newline
+   ╰────
+  help: remove it, or use it in the pattern

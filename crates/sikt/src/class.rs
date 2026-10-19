@@ -44,6 +44,16 @@ impl Kind {
         }
     }
 
+    /// Whether every character of this kind is also of kind `other`.
+    pub(crate) fn is_subset_of(self, other: Kind) -> bool {
+        use Kind::*;
+        self == other
+            || matches!(
+                (self, other),
+                (Digit, Hex | WordChar) | (Upper | Lower, Letter | WordChar) | (Letter, WordChar)
+            )
+    }
+
     pub(crate) fn matches(self, c: char) -> bool {
         match self {
             Kind::Digit => c.is_ascii_digit(),
@@ -144,6 +154,26 @@ impl CharSet {
             })
             .is_ok();
         in_range || self.kinds.iter().any(|k| k.matches(c))
+    }
+
+    /// Whether every character in `self` is also in `other`. Conservative:
+    /// `false` means "not known to be".
+    pub(crate) fn is_subset_of(&self, other: &CharSet) -> bool {
+        if self == other {
+            return true;
+        }
+        if self.negated || self.fold {
+            return false;
+        }
+        let ranges_in = self
+            .ranges
+            .iter()
+            .all(|&(lo, hi)| (hi as u32 - lo as u32) < 1024 && (lo..=hi).all(|c| other.matches(c)));
+        let kinds_in = self
+            .kinds
+            .iter()
+            .all(|&k| !other.negated && other.kinds.iter().any(|&o| k.is_subset_of(o)));
+        ranges_in && kinds_in
     }
 
     /// Whether any character outside ASCII can match.

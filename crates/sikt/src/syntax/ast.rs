@@ -190,6 +190,31 @@ impl ExprKind {
         }
     }
 
+    /// The literal every match starts with, and whether that literal is all
+    /// of `self` (so a following item can extend it).
+    pub fn literal_prefix(&self) -> (String, bool) {
+        match self {
+            ExprKind::Literal(s) => (s.clone(), true),
+            ExprKind::Anchor(_) | ExprKind::Look { .. } => (String::new(), true),
+            ExprKind::Seq(items) => {
+                let mut prefix = String::new();
+                for item in items {
+                    let (p, complete) = item.kind.literal_prefix();
+                    prefix.push_str(&p);
+                    if !complete {
+                        return (prefix, false);
+                    }
+                }
+                (prefix, true)
+            }
+            ExprKind::Capture { body, .. } => body.kind.literal_prefix(),
+            ExprKind::Repeat { min, body, .. } if *min >= 1 => {
+                (body.kind.literal_prefix().0, false)
+            }
+            _ => (String::new(), false),
+        }
+    }
+
     /// Whether this can succeed without consuming input.
     pub fn nullable(&self) -> bool {
         match self {
@@ -250,4 +275,6 @@ impl ExprKind {
 pub(crate) struct Ast {
     pub main: Expr,
     pub rules: Vec<Expr>,
+    /// Rules the main expression never reaches, with the span of their name.
+    pub unused_rules: Vec<(String, Span)>,
 }

@@ -22,7 +22,7 @@ pub(crate) enum Prefilter {
 
 impl Prefilter {
     pub fn new(expr: &Expr) -> Self {
-        let (prefix, _) = literal_prefix(expr);
+        let (prefix, _) = expr.kind.literal_prefix();
         if prefix.len() >= 2 {
             return Prefilter::Literal(Box::new(Finder::new(prefix.as_bytes()).into_owned()));
         }
@@ -161,29 +161,6 @@ fn first_bytes(e: &Expr) -> (ByteSet, bool) {
         ExprKind::Capture { body, .. } => first_bytes(body),
         ExprKind::Call { nullable, .. } => (ByteSet::full(), *nullable),
         ExprKind::NoCase(_) | ExprKind::Rule(_) => unreachable!("resolved before analysis"),
-    }
-}
-
-/// The literal every match starts with, and whether that literal is the whole
-/// of `e` (so a following item can extend it).
-fn literal_prefix(e: &Expr) -> (String, bool) {
-    match &e.kind {
-        ExprKind::Literal(s) => (s.clone(), true),
-        ExprKind::Anchor(_) | ExprKind::Look { .. } => (String::new(), true),
-        ExprKind::Seq(items) => {
-            let mut prefix = String::new();
-            for item in items {
-                let (p, complete) = literal_prefix(item);
-                prefix.push_str(&p);
-                if !complete {
-                    return (prefix, false);
-                }
-            }
-            (prefix, true)
-        }
-        ExprKind::Capture { body, .. } => literal_prefix(body),
-        ExprKind::Repeat { min, body, .. } if *min >= 1 => (literal_prefix(body).0, false),
-        _ => (String::new(), false),
     }
 }
 

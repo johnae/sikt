@@ -30,7 +30,14 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
     for (rule, refs) in rules.iter().zip(&mut refs) {
         check_names(src, &rule.body, &index, refs)?;
     }
-    check_names(src, &main, &index, &mut Vec::new())?;
+    let mut main_refs = Vec::new();
+    check_names(src, &main, &index, &mut main_refs)?;
+    let unused_rules = rules
+        .iter()
+        .enumerate()
+        .filter(|&(i, _)| !main_refs.iter().any(|&m| m == i || reaches(&refs, m, i)))
+        .map(|(_, rule)| (rule.name.clone(), rule.span))
+        .collect();
 
     let recursive: Vec<usize> = (0..rules.len()).filter(|&i| reaches(&refs, i, i)).collect();
     let mut r = Resolver {
@@ -72,6 +79,7 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
     Ok(Ast {
         main: lower_nocase(main),
         rules: bodies.into_iter().map(lower_nocase).collect(),
+        unused_rules,
     })
 }
 

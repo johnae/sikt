@@ -3,7 +3,8 @@ use std::ops::Range;
 
 use crate::class::char_len;
 use crate::compile::{Program, compile};
-use crate::error::{Error, MatchError};
+use crate::error::{Error, MatchError, Warning};
+use crate::lint::lint;
 use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::syntax::parse;
 use crate::vm::{self, CaptureEvent, Limits, Scratch};
@@ -20,6 +21,7 @@ pub struct Pattern {
     prefilter: Prefilter,
     leading_run: Option<LeadingRun>,
     limits: Limits,
+    warnings: Vec<Warning>,
 }
 
 impl fmt::Debug for Pattern {
@@ -59,6 +61,7 @@ impl PatternBuilder {
 
     pub fn build(&self, source: &str) -> Result<Pattern, Error> {
         let mut ast = parse(source)?;
+        let warnings = lint(&ast, source);
         if self.case_insensitive {
             ast.main = ast.main.fold_case();
         }
@@ -69,6 +72,7 @@ impl PatternBuilder {
             prefilter: Prefilter::new(&ast.main),
             leading_run: LeadingRun::new(&ast.main),
             limits: self.limits,
+            warnings,
         })
     }
 }
@@ -87,6 +91,11 @@ impl Pattern {
 
     pub fn source(&self) -> &str {
         &self.source
+    }
+
+    /// Things in the pattern that compile but probably don't do what was meant.
+    pub fn warnings(&self) -> &[Warning] {
+        &self.warnings
     }
 
     /// Capture names in order of first appearance.

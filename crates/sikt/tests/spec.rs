@@ -29,6 +29,7 @@ struct Case {
     label: Option<String>,
     max_steps: Option<u64>,
     max_depth: Option<u32>,
+    warnings: Option<Vec<String>>,
     #[serde(default)]
     case_insensitive: bool,
     match_error: Option<String>,
@@ -110,6 +111,15 @@ fn run(case: &Case) -> Result<(), Failed> {
     }
 
     let pattern = compiled.map_err(|e| format!("{:?}", miette::Report::new(e)))?;
+    if let Some(expected) = &case.warnings {
+        let found: Vec<_> = pattern.warnings().iter().map(|w| w.message()).collect();
+        if found != *expected {
+            return Err(format!(
+                "warnings differ\n  expected: {expected:?}\n     found: {found:?}"
+            )
+            .into());
+        }
+    }
     let mut found = Vec::new();
     for result in pattern.find_iter(&case.input) {
         match result {

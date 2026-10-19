@@ -1,7 +1,7 @@
 use std::fmt;
 use std::ops::Range;
 
-use miette::{Diagnostic, LabeledSpan, NamedSource, SourceCode};
+use miette::{Diagnostic, LabeledSpan, NamedSource, Severity, SourceCode};
 
 use crate::syntax::Span;
 
@@ -104,4 +104,70 @@ pub enum MatchError {
     /// Rules called each other more deeply than the pattern allows.
     #[error("pattern exceeded its call depth of {limit}")]
     DepthLimit { limit: u32 },
+}
+
+/// Something in a pattern that compiles but probably doesn't do what was
+/// meant, like an option that can never match.
+///
+/// Implements [`miette::Diagnostic`] with warning severity.
+pub struct Warning(Error);
+
+impl Warning {
+    pub(crate) fn new(
+        src: &str,
+        message: impl Into<String>,
+        span: Span,
+        help: impl Into<String>,
+    ) -> Self {
+        Warning(Error::new(src, message, span, None).with_help(help))
+    }
+
+    pub fn message(&self) -> &str {
+        self.0.message()
+    }
+
+    /// Byte range in the pattern source the warning points at.
+    pub fn span(&self) -> Range<usize> {
+        self.0.span()
+    }
+
+    pub fn help(&self) -> Option<&str> {
+        self.0.help()
+    }
+}
+
+impl fmt::Debug for Warning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Warning")
+            .field("message", &self.message())
+            .field("span", &self.span())
+            .field("help", &self.help())
+            .finish()
+    }
+}
+
+impl fmt::Display for Warning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for Warning {}
+
+impl Diagnostic for Warning {
+    fn severity(&self) -> Option<Severity> {
+        Some(Severity::Warning)
+    }
+
+    fn source_code(&self) -> Option<&dyn SourceCode> {
+        self.0.source_code()
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
+        self.0.labels()
+    }
+
+    fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        Diagnostic::help(&self.0)
+    }
 }

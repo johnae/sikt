@@ -1,0 +1,107 @@
+# Warnings: the pattern compiles and runs, but probably doesn't do what was
+# meant. Each case lists the warnings expected, in order.
+
+[[case]]
+name = "unreachable option after a shorter literal"
+pattern = '"a" or "ab"'
+input = "ab"
+matches = ["a"]
+warnings = ['`"ab"` can never match because `"a"` matches first']
+
+[[case]]
+name = "unreachable option after a literal prefix"
+pattern = '"in" or "int" digit'
+input = "int1"
+matches = ["in"]
+warnings = ['`"int" digit` can never match because `"in"` matches first']
+
+[[case]]
+name = "unreachable option after an option that matches empty"
+pattern = 'optional "a" or "b"'
+input = "b"
+matches = ["", ""]
+warnings = ['`"b"` can never match because `optional "a"` always matches']
+
+[[case]]
+name = "reachable options"
+pattern = '"ab" or "a" or "b"'
+input = "ab"
+matches = ["ab"]
+warnings = []
+
+[[case]]
+name = "possessive any"
+pattern = '0+ any "x"'
+input = "ax"
+matches = []
+warnings = ['`0+ any` takes everything, so `"x"` can never match after it']
+
+[[case]]
+name = "possessive kind before a literal"
+pattern = '1+ letter "s"'
+input = "cats"
+matches = []
+warnings = ['`1+ letter` takes every `"s"`, so `"s"` can never match after it']
+
+[[case]]
+name = "possessive kind before a smaller kind"
+pattern = '1+ wordchar digit'
+input = "ab1"
+matches = []
+warnings = ['`1+ wordchar` takes every `digit`, so `digit` can never match after it']
+
+[[case]]
+name = "possessive kind before something else"
+pattern = '1+ letter digit'
+input = "ab1"
+matches = ["ab1"]
+warnings = []
+
+[[case]]
+name = "bounded repetition is not a trap"
+pattern = '1..3 digit digit'
+input = "1234"
+matches = ["1234"]
+warnings = []
+
+[[case]]
+name = "until something that always matches"
+pattern = '"[" until optional "]"'
+input = "[a]"
+matches = ["["]
+warnings = ['`until` stops at once because `optional "]"` always matches']
+
+[[case]]
+name = "until binds tighter than or"
+pattern = '"<" until ">" or newline'
+input = "<a>"
+matches = ["<a"]
+warnings = ['`until` applies only to `">"` here, not to the whole `or`']
+
+[[case]]
+name = "parenthesized until is fine"
+pattern = '(until ">") or newline'
+input = "a>"
+matches = ["a", ""]
+warnings = []
+
+[[case]]
+name = "unused rule"
+pattern = 'let a = "a" let b = "b" find a'
+input = "ab"
+matches = ["a"]
+warnings = ["rule `b` is never used"]
+
+[[case]]
+name = "warning in a rule used twice is reported once"
+pattern = 'let x = "a" or "ab" find x x'
+input = "aa"
+matches = ["aa"]
+warnings = ['`"ab"` can never match because `"a"` matches first']
+
+[[case]]
+name = "until something that can match empty but can fail"
+pattern = 'line start "#" until (newline or text end)'
+input = "#a\n"
+matches = ["#a"]
+warnings = []
