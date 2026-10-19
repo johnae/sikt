@@ -1,0 +1,68 @@
+# Explanations of why nothing matched. `explain` is the expected report; an
+# empty `explain` means the pattern matches, so there is nothing to explain.
+
+[[case]]
+name = "closest attempt with captures"
+pattern = 'stamp: until " [" " [" level: 1+ upper "] " 1+ letter space ":"'
+input = "info\nnope\n2026-10-19 15:13:02 [WARN] db - slow query"
+explain = '''
+no match. closest attempt on line 3:
+  matched `stamp`, `level`, then expected ":" but found "-"
+  2026-10-19 15:13:02 [WARN] db - slow query
+                                ^'''
+
+[[case]]
+name = "several things expected"
+pattern = '"a" ("b" or "c")'
+input = "ax"
+explain = '''
+no match. closest attempt on line 1:
+  expected "b" or "c" but found "x"
+  ax
+   ^'''
+
+[[case]]
+name = "end of the text"
+pattern = '"(" until ")"'
+input = "(abc"
+explain = '''
+no match. closest attempt on line 1:
+  expected ")" but found the end of the text
+  (abc
+      ^'''
+
+[[case]]
+name = "kinds"
+pattern = '3 digit'
+input = "12a"
+explain = '''
+no match. closest attempt on line 1:
+  expected digit but found "a"
+  12a
+    ^'''
+
+[[case]]
+name = "anchors"
+pattern = '"x" line end'
+input = "xy"
+explain = '''
+no match. closest attempt on line 1:
+  expected line end but found "y"
+  xy
+   ^'''
+
+[[case]]
+name = "empty text"
+pattern = '"a"'
+input = ""
+explain = '''
+no match. closest attempt on line 1:
+  expected "a" but found the end of the text
+  
+  ^'''
+
+[[case]]
+name = "a match means nothing to explain"
+pattern = '"b"'
+input = "abc"
+explain = ""

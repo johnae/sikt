@@ -11,6 +11,8 @@
 //!
 //! With `program = true`, the pattern is a program: the case checks `matches`
 //! (after `where`), the `output` of `replace`, or the `printed` lines.
+//!
+//! `explain` checks the report of why nothing matched; empty means a match.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -43,6 +45,7 @@ struct Case {
     #[serde(default)]
     program: bool,
     printed: Option<Vec<String>>,
+    explain: Option<String>,
     #[serde(default)]
     case_insensitive: bool,
     match_error: Option<String>,
@@ -135,6 +138,11 @@ fn run(case: &Case) -> Result<(), Failed> {
             )
             .into());
         }
+    }
+    if let Some(expected) = &case.explain {
+        let explanation = pattern.explain(&case.input).map_err(|e| e.to_string())?;
+        let report = explanation.map(|e| e.to_string()).unwrap_or_default();
+        return check("explanation", &report, expected.trim_start_matches('\n'));
     }
     if let Some(source) = &case.replace {
         let template = Template::new(source, &pattern);

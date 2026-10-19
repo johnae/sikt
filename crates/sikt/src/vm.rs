@@ -57,6 +57,69 @@ pub(crate) fn exec(
     scratch: &mut Scratch,
     limits: Limits,
 ) -> Result<Option<usize>, MatchError> {
+    run(program, hay, start, scratch, limits, &mut ())
+}
+
+/// Like [`exec`], recording into `trace` how far the attempt got.
+pub(crate) fn exec_traced(
+    program: &Code,
+    hay: &[u8],
+    start: usize,
+    scratch: &mut Scratch,
+    limits: Limits,
+    trace: &mut Trace,
+) -> Result<Option<usize>, MatchError> {
+    run(program, hay, start, scratch, limits, trace)
+}
+
+/// Watches failures. The no-op `()` tracer compiles away.
+trait Tracer {
+    const ENABLED: bool;
+    fn fail(&mut self, pos: usize, pc: usize, captures: &[CaptureEvent]);
+}
+
+impl Tracer for () {
+    const ENABLED: bool = false;
+    fn fail(&mut self, _: usize, _: usize, _: &[CaptureEvent]) {}
+}
+
+/// The farthest point one attempt reached: the instructions that failed
+/// there, and the capture slots closed by then.
+#[derive(Debug, Default)]
+pub(crate) struct Trace {
+    pub farthest: Option<usize>,
+    pub failed: Vec<usize>,
+    pub closed: Vec<u32>,
+}
+
+impl Tracer for Trace {
+    const ENABLED: bool = true;
+
+    fn fail(&mut self, pos: usize, pc: usize, captures: &[CaptureEvent]) {
+        if self.farthest.is_some_and(|f| pos < f) {
+            return;
+        }
+        if self.farthest != Some(pos) {
+            self.farthest = Some(pos);
+            self.failed.clear();
+            self.closed = captures
+                .iter()
+                .filter(|e| !e.open)
+                .map(|e| e.slot)
+                .collect();
+        }
+        self.failed.push(pc);
+    }
+}
+
+fn run<T: Tracer>(
+    program: &Code,
+    hay: &[u8],
+    start: usize,
+    scratch: &mut Scratch,
+    limits: Limits,
+    tracer: &mut T,
+) -> Result<Option<usize>, MatchError> {
     let insts = &program.insts[..];
     let Scratch {
         stack,
@@ -238,6 +301,15 @@ pub(crate) fn exec(
         if ok {
             pc += 1;
         } else {
+            if T::ENABLED && program.spans[pc].is_some() {
+                // `until` with a literal fails having searched to the end.
+                let at = if matches!(insts[pc], Inst::UntilLiteral(_)) {
+                    hay.len()
+                } else {
+                    pos
+                };
+                tracer.fail(at, pc, captures);
+            }
             // Unwind to the latest choice, leaving the rules it was inside.
             let frame = loop {
                 match stack.pop() {

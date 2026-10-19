@@ -5,12 +5,13 @@ use std::ops::Range;
 use crate::class::char_len;
 use crate::compile::{Code, compile};
 use crate::error::{Error, MatchError, Warning};
+use crate::explain::Explanation;
 use crate::lint::lint;
 use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::program::Program;
 use crate::syntax::{Ast, parse};
 use crate::template::Template;
-use crate::vm::{self, CaptureEvent, Limits, Scratch};
+use crate::vm::{self, CaptureEvent, Limits, Scratch, Trace};
 
 const DEFAULT_LIMITS: Limits = Limits {
     steps: 10_000_000,
@@ -166,6 +167,62 @@ impl Pattern {
 
     pub(crate) fn limits(&self) -> Limits {
         self.limits
+    }
+
+    /// Why the pattern matches nowhere in `text`: the attempt that got
+    /// farthest, or `None` if there is a match. Tries every position, so it's
+    /// slower than searching; meant for when a search came up empty.
+    pub fn explain<'a>(&self, text: &'a str) -> Result<Option<Explanation<'a>>, MatchError> {
+        let hay = text.as_bytes();
+        let mut scratch = Scratch::new(&self.program);
+        // The attempt that got farthest from where it started; the first wins ties.
+        let mut best = Trace::default();
+        let mut best_progress = None;
+        let mut pos = 0;
+        while pos <= hay.len() {
+            let mut trace = Trace::default();
+            let found = vm::exec_traced(
+                &self.program,
+                hay,
+                pos,
+                &mut scratch,
+                self.limits,
+                &mut trace,
+            )?;
+            if found.is_some() {
+                return Ok(None);
+            }
+            let progress = trace.farthest.map(|f| f - pos);
+            if progress > best_progress {
+                best_progress = progress;
+                best = trace;
+            }
+            pos += if pos < hay.len() {
+                char_len(&hay[pos..])
+            } else {
+                1
+            };
+        }
+        let mut expected: Vec<String> = Vec::new();
+        for span in best.failed.iter().filter_map(|&pc| self.program.spans[pc]) {
+            let source = &self.source[span.start..span.end];
+            if !expected.iter().any(|e| e == source) {
+                expected.push(source.to_owned());
+            }
+        }
+        let mut matched: Vec<String> = Vec::new();
+        for &slot in &best.closed {
+            let name = &self.program.captures[slot as usize];
+            if !matched.contains(name) {
+                matched.push(name.clone());
+            }
+        }
+        Ok(Some(Explanation::new(
+            text,
+            best.farthest.unwrap_or(0),
+            expected,
+            matched,
+        )))
     }
 
     /// All non-overlapping matches, left to right. After an empty match the

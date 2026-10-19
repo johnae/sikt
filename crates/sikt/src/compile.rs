@@ -4,7 +4,7 @@ use memchr::memmem::Finder;
 
 use crate::class::CharSet;
 use crate::error::Error;
-use crate::syntax::{Anchor, Ast, Expr, ExprKind};
+use crate::syntax::{Anchor, Ast, Expr, ExprKind, Span};
 
 /// Keeps patterns like `1000 (1000 "x")` from exhausting memory.
 const MAX_INSTS: usize = 1 << 20;
@@ -59,6 +59,9 @@ pub(crate) struct Code {
     pub sets: Vec<CharSet>,
     /// Capture names, indexed by slot.
     pub captures: Vec<String>,
+    /// For each instruction that can fail on the input, the pattern source it
+    /// came from. Explanations describe what was expected with it.
+    pub spans: Vec<Option<Span>>,
 }
 
 pub(crate) fn compile(ast: &Ast, src: &str) -> Result<Code, Error> {
@@ -73,6 +76,7 @@ pub(crate) fn compile(ast: &Ast, src: &str) -> Result<Code, Error> {
             finders: Vec::new(),
             sets: Vec::new(),
             captures: Vec::new(),
+            spans: Vec::new(),
         },
     };
     c.expr(&ast.main)?;
@@ -108,7 +112,14 @@ struct Compiler<'s> {
 impl Compiler<'_> {
     fn push(&mut self, inst: Inst) -> usize {
         self.program.insts.push(inst);
+        self.program.spans.push(None);
         self.program.insts.len() - 1
+    }
+
+    /// Pushes an instruction that can fail on the input, noting its source.
+    fn push_at(&mut self, inst: Inst, span: Span) {
+        let pc = self.push(inst);
+        self.program.spans[pc] = Some(span);
     }
 
     fn here(&self) -> usize {
@@ -126,15 +137,13 @@ impl Compiler<'_> {
         }
     }
 
-    fn literal(&mut self, s: &str) {
+    fn literal(&mut self, s: &str, span: Span) {
         match s.as_bytes() {
             [] => {}
-            &[b] => {
-                self.push(Inst::Byte(b));
-            }
+            &[b] => self.push_at(Inst::Byte(b), span),
             bytes => {
                 self.program.literals.push(bytes.into());
-                self.push(Inst::Literal(self.program.literals.len() as u32 - 1));
+                self.push_at(Inst::Literal(self.program.literals.len() as u32 - 1), span);
             }
         }
     }
@@ -159,21 +168,19 @@ impl Compiler<'_> {
 
     fn expr(&mut self, e: &Expr) -> Result<(), Error> {
         match &e.kind {
-            ExprKind::Literal(s) => self.literal(s),
-            ExprKind::Any => {
-                self.push(Inst::Any);
-            }
+            ExprKind::Literal(s) => self.literal(s, e.span),
+            ExprKind::Any => self.push_at(Inst::Any, e.span),
             ExprKind::Newline => {
                 let choice = self.push(Inst::Choice(0));
-                self.literal("\r\n");
+                self.literal("\r\n", e.span);
                 let commit = self.push(Inst::Commit(0));
                 self.patch(choice);
-                self.literal("\n");
+                self.literal("\n", e.span);
                 self.patch(commit);
             }
             ExprKind::Class(set) => {
                 let i = self.set(set);
-                self.push(Inst::Set(i));
+                self.push_at(Inst::Set(i), e.span);
             }
             ExprKind::Seq(items) => {
                 for item in items {
@@ -201,9 +208,7 @@ impl Compiler<'_> {
                 self.expr(body)?;
                 self.push(Inst::Close(slot));
             }
-            ExprKind::Anchor(anchor) => {
-                self.push(Inst::Assert(*anchor));
-            }
+            ExprKind::Anchor(anchor) => self.push_at(Inst::Assert(*anchor), e.span),
             ExprKind::Look {
                 behind,
                 negated,
@@ -330,7 +335,10 @@ impl Compiler<'_> {
             self.program
                 .finders
                 .push(Finder::new(s.as_bytes()).into_owned());
-            self.push(Inst::UntilLiteral(self.program.finders.len() as u32 - 1));
+            self.push_at(
+                Inst::UntilLiteral(self.program.finders.len() as u32 - 1),
+                x.span,
+            );
             return Ok(());
         }
 

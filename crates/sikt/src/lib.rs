@@ -16,6 +16,7 @@
 mod class;
 mod compile;
 mod error;
+mod explain;
 mod lint;
 mod pattern;
 mod prefilter;
@@ -25,6 +26,7 @@ mod template;
 mod vm;
 
 pub use error::{Error, MatchError, Warning};
+pub use explain::Explanation;
 pub use pattern::{FindIter, Match, Pattern, PatternBuilder};
 pub use program::{Action, Program};
 pub use template::Template;
