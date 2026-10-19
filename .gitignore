@@ -1,0 +1,14 @@
+local
+
+# devenv
+.devenv*
+devenv.local.nix
+devenv.local.yaml
+.direnv
+
+# rust
+/target
+
+# fuzzing
+/fuzz/artifacts
+/fuzz/corpus
