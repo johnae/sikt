@@ -517,3 +517,16 @@ fn table_with_a_missing_column_fails() {
         .code(2)
         .stderr(contains("unknown capture `cpu`"));
 }
+
+#[test]
+fn table_sizes_and_percentages() {
+    sikt()
+        .args([
+            "--rows",
+            "table columns (fs size use mount) types size size use percent where size > 1G",
+        ])
+        .write_stdin("Filesystem Size Use% Mounted on\ntmpfs 16G 48% /\nrun 7.3M 1% /run\n")
+        .assert()
+        .success()
+        .stdout("{\"fs\":\"tmpfs\",\"size\":17179869184,\"use\":48.0,\"mount\":\"/\"}\n");
+}

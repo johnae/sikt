@@ -2,7 +2,7 @@ use super::ast::{Anchor, Cond, Expr, ExprKind, Output, Span, Statements, TableSp
 use super::lexer::{Tok, Token, lex};
 use crate::class::{CharSet, Kind};
 use crate::error::Error;
-use crate::value::CaptureType;
+use crate::value::{CaptureType, unit_factor};
 
 /// Words held back for features planned after v1.
 const RESERVED: &[&str] = &[
@@ -11,7 +11,8 @@ const RESERVED: &[&str] = &[
 
 /// Words that can start a pattern; used for "did you mean" suggestions.
 pub(super) const VOCABULARY: &[&str] = &[
-    "any", "newline", "optional", "until", "through", "nocase", "integer", "number",
+    "any", "newline", "optional", "until", "through", "nocase", "integer", "number", "size",
+    "percent",
 ];
 
 /// Words with a meaning of their own, which can't name a rule.
@@ -298,8 +299,16 @@ impl Parser<'_> {
                     return Err(self.error(message, op_span, None));
                 }
             };
-            self.bump();
-            Test::Compare(op, value)
+            let number = self.bump().span;
+            // A unit right after the number makes it a size: `1.5G`, `20MiB`.
+            let factor = match self.peek() {
+                Tok::Word(unit) if self.span().start == number.end => unit_factor(unit),
+                _ => None,
+            };
+            if factor.is_some() {
+                self.bump();
+            }
+            Test::Compare(op, value * factor.unwrap_or(1.0))
         } else if self.is_word("contains") {
             self.bump();
             Test::Contains(self.string("after `contains`")?)
@@ -420,12 +429,14 @@ impl Parser<'_> {
             let ty = match self.peek() {
                 Tok::Word(w) if w == "integer" => CaptureType::Integer,
                 Tok::Word(w) if w == "number" => CaptureType::Number,
+                Tok::Word(w) if w == "size" => CaptureType::Size,
+                Tok::Word(w) if w == "percent" => CaptureType::Percent,
                 Tok::Word(w) if w == "text" => CaptureType::Text,
                 _ => {
                     let message = format!("expected a type after `{name}`");
                     return Err(self
                         .error(message, name_span, None)
-                        .with_help("types are integer, number and text"));
+                        .with_help("types are integer, number, size, percent and text"));
                 }
             };
             self.bump();
@@ -665,6 +676,8 @@ impl Parser<'_> {
                 "line" | "text" | "word" => return self.anchor(&w, token.span),
                 "integer" => typed(CaptureType::Integer, token.span),
                 "number" => typed(CaptureType::Number, token.span),
+                "size" => typed(CaptureType::Size, token.span),
+                "percent" => typed(CaptureType::Percent, token.span),
                 w => match Kind::from_name(w) {
                     Some(kind) => ExprKind::Class(CharSet::kind(kind)),
                     None if RESERVED.contains(&w) => {
@@ -807,7 +820,7 @@ impl Parser<'_> {
     }
 }
 
-/// `integer` or `number` as a pattern, with every span on the word itself so
+/// A typed word like `integer` as a pattern, with every span on the word itself so
 /// explanations and warnings name the word.
 fn typed(ty: CaptureType, span: Span) -> ExprKind {
     let source = match ty {
@@ -815,6 +828,9 @@ fn typed(ty: CaptureType, span: Span) -> ExprKind {
         CaptureType::Number => {
             r#"optional one of "+-" (1+ digit optional ("." 1+ digit) or "." 1+ digit)"#
         }
+        // Units as in [`unit_factor`]: `K`, `Ki`, `KiB`, `KB`, `kB`, ..., `B`.
+        CaptureType::Size => r#"number optional (one of "KMGTPEkmgtpe" optional "i") optional "B""#,
+        CaptureType::Percent => r#"number "%""#,
         CaptureType::Text => unreachable!("text has no word"),
     };
     let mut body = parse(source).expect("built-in patterns parse").main;

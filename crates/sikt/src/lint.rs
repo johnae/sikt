@@ -83,6 +83,17 @@ impl Linter<'_> {
                     "make what it stops at match at least one character",
                 );
             }
+            ExprKind::Until(x) if has_capture(x) => {
+                let message = format!(
+                    "`until` stops before `{}`, so the captures in it are never set",
+                    self.text(x)
+                );
+                self.warn(
+                    message,
+                    x,
+                    "use `through` to match it and keep its captures",
+                );
+            }
             _ => {}
         }
         e.kind.children().iter().for_each(|child| self.expr(child));
@@ -194,6 +205,11 @@ impl Linter<'_> {
             self.warn(message, next, help);
         }
     }
+}
+
+/// Whether `e` captures anything.
+fn has_capture(e: &Expr) -> bool {
+    matches!(e.kind, ExprKind::Capture { .. }) || e.kind.children().iter().any(has_capture)
 }
 
 /// Whether `e` succeeds at every position, like `optional x` or `0+ x`.

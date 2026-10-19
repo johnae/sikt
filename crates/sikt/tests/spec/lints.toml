@@ -120,3 +120,10 @@ pattern = '"a" newline'
 input = "a\n"
 matches = ["a\n"]
 warnings = []
+
+[[case]]
+name = "captures inside until are dropped"
+pattern = '"<" until (">" tag: 1+ letter)'
+input = "<a>b"
+matches = ["<a"]
+warnings = ["`until` stops before `(\">\" tag: 1+ letter)`, so the captures in it are never set"]

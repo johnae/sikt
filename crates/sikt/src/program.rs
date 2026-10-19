@@ -9,6 +9,7 @@ use crate::syntax::{
 };
 use crate::table::Table;
 use crate::template::Template;
+use crate::value::Value;
 use crate::vm::{self, Scratch};
 
 /// What a program does with each match.
@@ -218,10 +219,18 @@ impl Program {
                         let folded = folded();
                         list.iter().any(|s| *s.as_bytes() == *folded)
                     }
-                    CheckedTest::Compare(op, n) => std::str::from_utf8(text)
-                        .ok()
-                        .and_then(|t| t.parse().ok())
-                        .is_some_and(|v: f64| op.holds(v, *n)),
+                    CheckedTest::Compare(op, n) => {
+                        // A typed capture compares by its value, so `16G` is bytes;
+                        // other text compares if it reads as a number.
+                        let value = match capture.as_deref().and_then(|name| m.value(name)) {
+                            Some(Value::Integer(i)) => Some(i as f64),
+                            Some(Value::Number(x)) => Some(x),
+                            Some(Value::Text(_)) | None => {
+                                std::str::from_utf8(text).ok().and_then(|t| t.parse().ok())
+                            }
+                        };
+                        value.is_some_and(|v| op.holds(v, *n))
+                    }
                     CheckedTest::Contains(s) => {
                         memchr::memmem::find(&folded(), s.as_bytes()).is_some()
                     }

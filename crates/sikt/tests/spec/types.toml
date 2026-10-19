@@ -57,3 +57,39 @@ error = "capture `n` has two types"
 name = "error: integer can't name a rule"
 pattern = 'let integer = digit find integer'
 error = "`integer` is a built-in word and can't name a rule"
+
+[[case]]
+name = "sizes are bytes"
+pattern = 's: size'
+input = "16G 7.7G 4.0K 512 1.5GiB 2MB 3kB 0B 1T"
+matches = [
+  { text = "16G", values = { s = 17179869184 } },
+  { text = "7.7G", values = { s = 8267812045 } },
+  { text = "4.0K", values = { s = 4096 } },
+  { text = "512", values = { s = 512 } },
+  { text = "1.5GiB", values = { s = 1610612736 } },
+  { text = "2MB", values = { s = 2000000 } },
+  { text = "3kB", values = { s = 3000 } },
+  { text = "0B", values = { s = 0 } },
+  { text = "1T", values = { s = 1099511627776 } },
+]
+
+[[case]]
+name = "percentages are numbers"
+pattern = 'p: percent'
+input = "48% 1.5% 7"
+matches = [{ text = "48%", values = { p = 48.0 } }, { text = "1.5%", values = { p = 1.5 } }]
+
+[[case]]
+name = "where compares sizes with units"
+program = true
+pattern = 'find name: 1+ letter space s: size where s > 1G'
+input = "a 2G b 512M c 1.5G d 2000000"
+matches = ["a 2G", "c 1.5G"]
+
+[[case]]
+name = "where compares typed numbers"
+program = true
+pattern = 'find p: percent where p >= 50'
+input = "48% 50% 99.5%"
+matches = ["50%", "99.5%"]
