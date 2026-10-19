@@ -36,3 +36,8 @@ pub use program::{Action, Program};
 pub use table::Table;
 pub use template::Template;
 pub use value::{CaptureType, Value};
+
+/// Compiles the README's Rust example as a doctest.
+#[doc = include_str!("../../../README.md")]
+#[cfg(doctest)]
+pub struct ReadmeDoctests;
