@@ -426,3 +426,20 @@ fn json_has_typed_values() {
         serde_json::json!({"user": "root", "pid": 1, "cpu": 0.5})
     );
 }
+
+#[test]
+fn rows_are_just_the_captures() {
+    let pattern = r#"line start optional (user: 1+ letter 1+ space) pid: integer 1+ space cmd: until text end"#;
+    let output = sikt()
+        .args(["--rows", pattern])
+        .write_stdin("PID CMD\nroot 1 init\n42 bash -l\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(
+        String::from_utf8(output).unwrap(),
+        "{\"user\":\"root\",\"pid\":1,\"cmd\":\"init\"}\n{\"pid\":42,\"cmd\":\"bash -l\"}\n"
+    );
+}

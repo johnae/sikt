@@ -55,6 +55,10 @@ struct Args {
     /// text and captures.
     #[arg(long)]
     json: bool,
+    /// Print each match's captures as one JSON object per line, with numbers
+    /// for `integer` and `number` and without captures that didn't take part.
+    #[arg(long, conflicts_with = "json")]
+    rows: bool,
     /// When nothing matches, show the closest attempt.
     #[arg(long)]
     explain: bool,
@@ -244,7 +248,7 @@ impl Search<'_> {
     fn needs_text(&self) -> bool {
         let args = self.args;
         self.program.action() != Action::Find
-            && !(args.files_with_matches || args.count || args.json)
+            && !(args.files_with_matches || args.count || args.json || args.rows)
     }
 
     /// Finds the matches in `bytes` and reports them: matching lines, only
@@ -280,6 +284,9 @@ impl Search<'_> {
             }
             if args.json {
                 self.json(name, line, &m)?;
+            } else if args.rows {
+                let row = serde_json::Value::Object(self.captures(&m, false));
+                writeln!(self.out, "{row}")?;
             } else if args.only_matching {
                 self.lead(name, line)?;
                 self.style.matched(&mut self.out, m.as_bytes())?;
@@ -303,7 +310,7 @@ impl Search<'_> {
             if !self.prefix || count > 0 {
                 writeln!(self.out, "{count}")?;
             }
-        } else if !args.json && !args.only_matching {
+        } else if !(args.json || args.rows || args.only_matching) {
             self.matching_lines(name, bytes, &spans)?;
         }
         self.spans = spans;
@@ -414,24 +421,35 @@ impl Search<'_> {
         Ok(())
     }
 
+    /// The captures of `m` as JSON, typed. Captures that didn't take part are
+    /// `null` with `keep_missing`, otherwise left out.
+    fn captures(
+        &self,
+        m: &Match<[u8]>,
+        keep_missing: bool,
+    ) -> serde_json::Map<String, serde_json::Value> {
+        self.program
+            .pattern()
+            .capture_names()
+            .filter_map(|n| {
+                let value = match m.value(n) {
+                    None if keep_missing => serde_json::Value::Null,
+                    None => return None,
+                    Some(Value::Text(text)) => String::from_utf8_lossy(text).into(),
+                    Some(Value::Integer(i)) => i.into(),
+                    Some(Value::Number(x)) => {
+                        serde_json::Number::from_f64(x).map_or(serde_json::Value::Null, Into::into)
+                    }
+                };
+                Some((n.to_owned(), value))
+            })
+            .collect()
+    }
+
     /// Text that isn't valid UTF-8 gets replacement characters, since JSON
     /// strings must be Unicode.
     fn json(&mut self, name: &str, line: usize, m: &Match<[u8]>) -> io::Result<()> {
-        let captures: serde_json::Map<String, serde_json::Value> =
-            self.program
-                .pattern()
-                .capture_names()
-                .map(|n| {
-                    let value = match m.value(n) {
-                        None => serde_json::Value::Null,
-                        Some(Value::Text(text)) => String::from_utf8_lossy(text).into(),
-                        Some(Value::Integer(i)) => i.into(),
-                        Some(Value::Number(x)) => serde_json::Number::from_f64(x)
-                            .map_or(serde_json::Value::Null, Into::into),
-                    };
-                    (n.to_owned(), value)
-                })
-                .collect();
+        let captures = self.captures(m, true);
         let record = serde_json::json!({
             "path": name,
             "line": line,
