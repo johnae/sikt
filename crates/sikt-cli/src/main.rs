@@ -11,6 +11,10 @@ use sikt::{Action, Match, Program, Table, Value};
 
 use crate::output::{Style, quote};
 
+// Faster than the C libraries' allocators, glibc's and musl's alike.
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Search and replace text with readable patterns.
 ///
 /// PROGRAM is a pattern like '"TODO"' or a program like
@@ -168,6 +172,7 @@ fn run(args: &Args) -> io::Result<ExitCode> {
         found: false,
         failed: false,
         spans: Vec::new(),
+        record: Vec::new(),
     };
     if paths.is_empty() {
         let mut bytes = Vec::new();
@@ -213,6 +218,8 @@ struct Search<'a> {
     failed: bool,
     /// Where the matches in a text are, kept to reuse its memory.
     spans: Vec<(usize, usize)>,
+    /// One JSON record, built before it's written in one piece.
+    record: Vec<u8>,
 }
 
 impl Search<'_> {
@@ -388,8 +395,10 @@ impl Search<'_> {
             if args.json {
                 self.json(name, line, at.byte, &m)?;
             } else if args.rows {
-                let row = serde_json::Value::Object(captures(&m, false));
-                writeln!(self.out, "{row}")?;
+                self.record.clear();
+                write_captures(&mut self.record, &m, false);
+                self.record.push(b'\n');
+                self.out.write_all(&self.record)?;
             } else if args.only_matching {
                 self.lead(name, line)?;
                 self.style.matched(&mut self.out, m.as_bytes())?;
@@ -486,6 +495,11 @@ impl Search<'_> {
         spans: &[(usize, usize)],
         first_line: usize,
     ) -> io::Result<()> {
+        let numbered = self.prefix || self.args.line_number;
+        // Without color or a lead, lines go out exactly as they are, so a run of
+        // matching lines goes out as one piece of the input.
+        let plain = !self.style.color && !numbered;
+        let mut run = 0..0;
         let (mut counted, mut number) = (0, first_line);
         let mut first = 0;
         let mut line_start = 0;
@@ -500,19 +514,31 @@ impl Search<'_> {
                 Some(nl) => (nl, nl + 1),
                 None => (bytes.len(), bytes.len() + 1),
             };
-            number += memchr::memchr_iter(b'\n', &bytes[counted..line_start]).count();
-            counted = line_start;
+            if numbered {
+                number += memchr::memchr_iter(b'\n', &bytes[counted..line_start]).count();
+                counted = line_start;
+            }
             if start <= end {
-                let hits = spans[first..]
-                    .iter()
-                    .take_while(|&&(start, _)| start <= end)
-                    .map(|&(start, stop)| {
-                        start.max(line_start) - line_start..stop.min(end) - line_start
-                    });
-                self.lead(name, number)?;
-                self.style
-                    .highlight(&mut self.out, &bytes[line_start..end], hits)?;
-                writeln!(self.out)?;
+                if plain && newline == Some(end) {
+                    if run.end != line_start {
+                        self.out.write_all(&bytes[run])?;
+                        run = line_start..line_start;
+                    }
+                    run.end = next;
+                } else {
+                    self.out
+                        .write_all(&bytes[std::mem::replace(&mut run, 0..0)])?;
+                    let hits = spans[first..]
+                        .iter()
+                        .take_while(|&&(start, _)| start <= end)
+                        .map(|&(start, stop)| {
+                            start.max(line_start) - line_start..stop.min(end) - line_start
+                        });
+                    self.lead(name, number)?;
+                    self.style
+                        .highlight(&mut self.out, &bytes[line_start..end], hits)?;
+                    self.out.write_all(b"\n")?;
+                }
             }
             // Matches that end on this line are done; one that runs on
             // shows again on the next line.
@@ -527,22 +553,27 @@ impl Search<'_> {
                 break;
             }
         }
-        Ok(())
+        self.out.write_all(&bytes[run])
     }
 
-    /// Text that isn't valid UTF-8 gets replacement characters, since JSON
-    /// strings must be Unicode.
+    /// The `--json` record for `m`, built in one buffer and written at once.
     fn json(&mut self, name: &str, line: usize, base: usize, m: &Match<[u8]>) -> io::Result<()> {
-        let captures = captures(m, true);
-        let record = serde_json::json!({
-            "path": name,
-            "line": line,
-            "start": base + m.start(),
-            "end": base + m.end(),
-            "text": String::from_utf8_lossy(m.as_bytes()),
-            "captures": captures,
-        });
-        writeln!(self.out, "{record}")
+        let record = &mut self.record;
+        record.clear();
+        record.extend_from_slice(b"{\"path\":");
+        write_string(record, name.as_bytes());
+        record.extend_from_slice(b",\"line\":");
+        write_json(record, &line);
+        record.extend_from_slice(b",\"start\":");
+        write_json(record, &(base + m.start()));
+        record.extend_from_slice(b",\"end\":");
+        write_json(record, &(base + m.end()));
+        record.extend_from_slice(b",\"text\":");
+        write_string(record, m.as_bytes());
+        record.extend_from_slice(b",\"captures\":");
+        write_captures(record, m, true);
+        record.extend_from_slice(b"}\n");
+        self.out.write_all(record)
     }
 
     /// Writes the replaced text: to stdout for stdin, and for files a diff,
@@ -650,21 +681,37 @@ struct Position {
     line: usize,
 }
 
-/// The captures of `m` as JSON, typed. Captures that didn't take part are
-/// `null` with `keep_missing`, otherwise left out.
-fn captures(m: &Match<[u8]>, keep_missing: bool) -> serde_json::Map<String, serde_json::Value> {
-    m.values()
-        .filter_map(|(name, value)| {
-            let value = match value {
-                None if keep_missing => serde_json::Value::Null,
-                None => return None,
-                Some(Value::Text(text)) => String::from_utf8_lossy(text).into(),
-                Some(Value::Integer(i)) => i.into(),
-                Some(Value::Number(x)) => {
-                    serde_json::Number::from_f64(x).map_or(serde_json::Value::Null, Into::into)
-                }
-            };
-            Some((name.to_owned(), value))
-        })
-        .collect()
+/// Writes the captures of `m` to `out` as a JSON object, typed. Captures that
+/// didn't take part are `null` with `keep_missing`, otherwise left out.
+fn write_captures(out: &mut Vec<u8>, m: &Match<[u8]>, keep_missing: bool) {
+    out.push(b'{');
+    let mut first = true;
+    for (name, value) in m.values() {
+        if value.is_none() && !keep_missing {
+            continue;
+        }
+        if !std::mem::take(&mut first) {
+            out.push(b',');
+        }
+        write_string(out, name.as_bytes());
+        out.push(b':');
+        match value {
+            None => out.extend_from_slice(b"null"),
+            Some(Value::Text(text)) => write_string(out, text),
+            Some(Value::Integer(i)) => write_json(out, &i),
+            // JSON has no infinities; serde_json writes them as `null`.
+            Some(Value::Number(x)) => write_json(out, &x),
+        }
+    }
+    out.push(b'}');
+}
+
+/// Writes `text` as a JSON string. Text that isn't valid UTF-8 gets
+/// replacement characters, since JSON strings must be Unicode.
+fn write_string(out: &mut Vec<u8>, text: &[u8]) {
+    write_json(out, &*String::from_utf8_lossy(text));
+}
+
+fn write_json(out: &mut Vec<u8>, value: &(impl serde::Serialize + ?Sized)) {
+    serde_json::to_writer(out, value).expect("writing JSON to memory can't fail");
 }

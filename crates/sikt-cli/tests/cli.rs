@@ -602,3 +602,13 @@ fn table_explain() {
             "the pattern matches, but `where` rejected every match",
         ));
 }
+
+#[test]
+fn plain_output_keeps_lines_intact() {
+    sikt()
+        .arg(r#""x""#)
+        .write_stdin("x1\nx2\nno\nx3\r\nx4\nx5")
+        .assert()
+        .success()
+        .stdout("x1\nx2\nx3\nx4\nx5\n");
+}
