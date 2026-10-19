@@ -5,6 +5,7 @@ use memchr::memmem::Finder;
 use crate::class::CharSet;
 use crate::error::Error;
 use crate::syntax::{Anchor, Ast, Expr, ExprKind, Span};
+use crate::value::CaptureType;
 
 /// Keeps patterns like `1000 (1000 "x")` from exhausting memory.
 const MAX_INSTS: usize = 1 << 20;
@@ -59,6 +60,8 @@ pub(crate) struct Code {
     pub sets: Vec<CharSet>,
     /// Capture names, indexed by slot.
     pub captures: Vec<String>,
+    /// Capture types, indexed by slot.
+    pub capture_types: Vec<CaptureType>,
     /// For each instruction that can fail on the input, the pattern source it
     /// came from. Explanations describe what was expected with it.
     pub spans: Vec<Option<Span>>,
@@ -76,6 +79,7 @@ pub(crate) fn compile(ast: &Ast, src: &str) -> Result<Code, Error> {
             finders: Vec::new(),
             sets: Vec::new(),
             captures: Vec::new(),
+            capture_types: Vec::new(),
             spans: Vec::new(),
         },
     };
@@ -157,13 +161,30 @@ impl Compiler<'_> {
         i as u32
     }
 
-    fn slot(&mut self, name: &str) -> u32 {
-        let captures = &mut self.program.captures;
-        let slot = captures.iter().position(|n| n == name).unwrap_or_else(|| {
-            captures.push(name.to_owned());
-            captures.len() - 1
-        });
-        slot as u32
+    /// The slot for capture `name` of type `ty`. Every capture under one name
+    /// must have the same type.
+    fn slot(&mut self, name: &str, ty: CaptureType, span: Span) -> Result<u32, Error> {
+        let program = &mut self.program;
+        let slot = match program.captures.iter().position(|n| n == name) {
+            Some(slot) => slot,
+            None => {
+                program.captures.push(name.to_owned());
+                program.capture_types.push(ty);
+                program.captures.len() - 1
+            }
+        };
+        let other = program.capture_types[slot];
+        if other != ty {
+            let label = Some(format!("{} here, {} elsewhere", ty.name(), other.name()));
+            return Err(Error::new(
+                self.src,
+                format!("capture `{name}` has two types"),
+                span,
+                label,
+            )
+            .with_help("capture the same kind of value under one name"));
+        }
+        Ok(slot as u32)
     }
 
     fn expr(&mut self, e: &Expr) -> Result<(), Error> {
@@ -203,11 +224,16 @@ impl Compiler<'_> {
             }
             ExprKind::Repeat { min, max, body } => self.repeat(*min, *max, body)?,
             ExprKind::Capture { name, body } => {
-                let slot = self.slot(name);
+                let ty = match &body.kind {
+                    ExprKind::Typed { ty, .. } => *ty,
+                    _ => CaptureType::Text,
+                };
+                let slot = self.slot(name, ty, e.span)?;
                 self.push(Inst::Open(slot));
                 self.expr(body)?;
                 self.push(Inst::Close(slot));
             }
+            ExprKind::Typed { body, .. } => self.expr(body)?,
             ExprKind::Anchor(anchor) => self.push_at(Inst::Assert(*anchor), e.span),
             ExprKind::Look {
                 behind,

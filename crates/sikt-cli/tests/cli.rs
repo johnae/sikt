@@ -406,3 +406,23 @@ fn replace_skips_files_that_are_not_utf8() {
         b"caf\xe9 hello\n"
     );
 }
+
+#[test]
+fn json_has_typed_values() {
+    let output = sikt()
+        .args([
+            "--json",
+            r#"user: 1+ letter 1+ space pid: integer 1+ space cpu: number"#,
+        ])
+        .write_stdin("root 1 0.5\n")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let record: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        record["captures"],
+        serde_json::json!({"user": "root", "pid": 1, "cpu": 0.5})
+    );
+}

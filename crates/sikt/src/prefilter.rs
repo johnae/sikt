@@ -158,7 +158,7 @@ fn first_bytes(e: &Expr) -> (ByteSet, bool) {
             let (set, nullable) = first_bytes(body);
             (set, nullable || *min == 0)
         }
-        ExprKind::Capture { body, .. } => first_bytes(body),
+        ExprKind::Capture { body, .. } | ExprKind::Typed { body, .. } => first_bytes(body),
         ExprKind::Call { nullable, .. } => (ByteSet::full(), *nullable),
         ExprKind::NoCase(_) | ExprKind::Rule(_) => unreachable!("resolved before analysis"),
     }
@@ -262,7 +262,7 @@ impl LeadingRun {
 /// that follow it onto `rest`, last item first.
 fn split_first<'a>(e: &'a Expr, rest: &mut Vec<&'a Expr>) -> &'a Expr {
     match &e.kind {
-        ExprKind::Capture { body, .. } => split_first(body, rest),
+        ExprKind::Capture { body, .. } | ExprKind::Typed { body, .. } => split_first(body, rest),
         ExprKind::Seq(items) => {
             rest.extend(items[1..].iter().rev());
             split_first(&items[0], rest)

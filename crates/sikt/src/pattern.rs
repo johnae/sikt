@@ -12,6 +12,7 @@ use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::program::Program;
 use crate::syntax::{Ast, parse};
 use crate::template::Template;
+use crate::value::{CaptureType, Value};
 use crate::vm::{self, Captures, Limits, Scratch, Trace};
 
 const DEFAULT_LIMITS: Limits = Limits {
@@ -147,6 +148,13 @@ impl Pattern {
     /// Things in the pattern that compile but probably don't do what was meant.
     pub fn warnings(&self) -> &[Warning] {
         &self.warnings
+    }
+
+    /// What the capture `name` holds: text, or a number for captures of
+    /// `integer` and `number`.
+    pub fn capture_type(&self, name: &str) -> Option<CaptureType> {
+        let slot = self.program.captures.iter().position(|n| n == name)?;
+        Some(self.program.capture_types[slot])
     }
 
     /// Capture names in order of first appearance.
@@ -508,6 +516,13 @@ impl<'a, H: Haystack + ?Sized> Match<'a, H> {
     /// The last text captured under `name`, or `None` if it didn't participate.
     pub fn get(&self, name: &str) -> Option<&'a H> {
         self.span(name).map(|r| self.text.part(r))
+    }
+
+    /// The last capture under `name` as a typed value: a number for captures
+    /// of `integer` and `number`, otherwise its text.
+    pub fn value(&self, name: &str) -> Option<Value<'a, H>> {
+        let ty = self.pattern.capture_type(name)?;
+        Some(ty.value(self.get(name)?))
     }
 
     /// Byte offsets of the last text captured under `name`.

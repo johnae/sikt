@@ -24,6 +24,7 @@ mod prefilter;
 mod program;
 mod syntax;
 mod template;
+mod value;
 mod vm;
 
 pub use error::{Error, MatchError, Warning};
@@ -32,3 +33,4 @@ pub use haystack::Haystack;
 pub use pattern::{FindIter, Match, Pattern, PatternBuilder};
 pub use program::{Action, Program};
 pub use template::Template;
+pub use value::{CaptureType, Value};

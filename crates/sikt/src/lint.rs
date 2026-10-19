@@ -203,7 +203,7 @@ fn never_fails(e: &Expr) -> bool {
         ExprKind::Repeat { min, body, .. } => *min == 0 || never_fails(body),
         ExprKind::Seq(items) => items.iter().all(never_fails),
         ExprKind::Choice(alts) => alts.iter().any(never_fails),
-        ExprKind::Capture { body, .. } => never_fails(body),
+        ExprKind::Capture { body, .. } | ExprKind::Typed { body, .. } => never_fails(body),
         _ => false,
     }
 }
@@ -214,7 +214,7 @@ fn first_class(e: &Expr) -> Option<(&Expr, &CharSet)> {
     match &e.kind {
         ExprKind::Class(set) => Some((e, set)),
         ExprKind::Seq(items) => first_class(&items[0]),
-        ExprKind::Capture { body, .. } => first_class(body),
+        ExprKind::Capture { body, .. } | ExprKind::Typed { body, .. } => first_class(body),
         ExprKind::Repeat { min, body, .. } if *min >= 1 => first_class(body),
         _ => None,
     }

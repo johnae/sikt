@@ -2,6 +2,7 @@ use super::ast::{Anchor, Cond, Expr, ExprKind, Output, Span, Statements, Test};
 use super::lexer::{Tok, Token, lex};
 use crate::class::{CharSet, Kind};
 use crate::error::Error;
+use crate::value::CaptureType;
 
 /// Words held back for features planned after v1.
 const RESERVED: &[&str] = &[
@@ -9,8 +10,9 @@ const RESERVED: &[&str] = &[
 ];
 
 /// Words that can start a pattern; used for "did you mean" suggestions.
-pub(super) const VOCABULARY: &[&str] =
-    &["any", "newline", "optional", "until", "through", "nocase"];
+pub(super) const VOCABULARY: &[&str] = &[
+    "any", "newline", "optional", "until", "through", "nocase", "integer", "number",
+];
 
 /// Words with a meaning of their own, which can't name a rule.
 const KEYWORDS: &[&str] = &[
@@ -518,6 +520,8 @@ impl Parser<'_> {
                 "newline" => ExprKind::Newline,
                 "one" | "none" => self.set(token.span, w == "none")?,
                 "line" | "text" | "word" => return self.anchor(&w, token.span),
+                "integer" => typed(CaptureType::Integer, token.span),
+                "number" => typed(CaptureType::Number, token.span),
                 w => match Kind::from_name(w) {
                     Some(kind) => ExprKind::Class(CharSet::kind(kind)),
                     None if RESERVED.contains(&w) => {
@@ -660,6 +664,31 @@ impl Parser<'_> {
     }
 }
 
+/// `integer` or `number` as a pattern, with every span on the word itself so
+/// explanations and warnings name the word.
+fn typed(ty: CaptureType, span: Span) -> ExprKind {
+    let source = match ty {
+        CaptureType::Integer => r#"optional one of "+-" 1+ digit"#,
+        CaptureType::Number => {
+            r#"optional one of "+-" (1+ digit optional ("." 1+ digit) or "." 1+ digit)"#
+        }
+        CaptureType::Text => unreachable!("text has no word"),
+    };
+    let mut body = parse(source).expect("built-in patterns parse").main;
+    respan(&mut body, span);
+    ExprKind::Typed {
+        ty,
+        body: Box::new(body),
+    }
+}
+
+fn respan(e: &mut Expr, span: Span) {
+    e.span = span;
+    for child in e.kind.children_mut() {
+        respan(child, span);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -685,6 +714,7 @@ mod tests {
             },
             ExprKind::Capture { name, body } => format!("{name}:({})", show(body)),
             ExprKind::Anchor(a) => format!("{a:?}"),
+            ExprKind::Typed { ty, body } => format!("{ty:?}({})", show(body)),
             ExprKind::NoCase(x) => format!("nocase({})", show(x)),
             ExprKind::Rule(name) => format!("rule {name}"),
             ExprKind::Call { rule, .. } => format!("call {rule}"),

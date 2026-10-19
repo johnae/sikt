@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
 use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme};
-use sikt::{Action, Match, Program};
+use sikt::{Action, Match, Program, Value};
 
 use crate::output::{Style, quote};
 
@@ -417,19 +417,21 @@ impl Search<'_> {
     /// Text that isn't valid UTF-8 gets replacement characters, since JSON
     /// strings must be Unicode.
     fn json(&mut self, name: &str, line: usize, m: &Match<[u8]>) -> io::Result<()> {
-        let captures: serde_json::Map<String, serde_json::Value> = self
-            .program
-            .pattern()
-            .capture_names()
-            .map(|n| {
-                (
-                    n.to_owned(),
-                    m.get(n).map_or(serde_json::Value::Null, |c| {
-                        String::from_utf8_lossy(c).into()
-                    }),
-                )
-            })
-            .collect();
+        let captures: serde_json::Map<String, serde_json::Value> =
+            self.program
+                .pattern()
+                .capture_names()
+                .map(|n| {
+                    let value = match m.value(n) {
+                        None => serde_json::Value::Null,
+                        Some(Value::Text(text)) => String::from_utf8_lossy(text).into(),
+                        Some(Value::Integer(i)) => i.into(),
+                        Some(Value::Number(x)) => serde_json::Number::from_f64(x)
+                            .map_or(serde_json::Value::Null, Into::into),
+                    };
+                    (n.to_owned(), value)
+                })
+                .collect();
         let record = serde_json::json!({
             "path": name,
             "line": line,

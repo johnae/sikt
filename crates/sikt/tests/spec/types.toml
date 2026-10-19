@@ -1,0 +1,59 @@
+# Typed captures: `integer` and `number` match numbers and give their captures
+# a value. `values` checks those values; text stays available as before.
+
+[[case]]
+name = "integer"
+pattern = 'n: integer'
+input = "a 12 -3 +4 5x"
+matches = [
+  { text = "12", values = { n = 12 } },
+  { text = "-3", values = { n = -3 } },
+  { text = "+4", values = { n = 4 } },
+  { text = "5", values = { n = 5 } },
+]
+
+[[case]]
+name = "number"
+pattern = 'x: number'
+input = "1.5 -0.25 .5 7 1."
+matches = [
+  { text = "1.5", values = { x = 1.5 } },
+  { text = "-0.25", values = { x = -0.25 } },
+  { text = ".5", values = { x = 0.5 } },
+  { text = "7", values = { x = 7.0 } },
+  { text = "1", values = { x = 1.0 } },
+]
+
+[[case]]
+name = "untyped captures are text"
+pattern = 'n: 1+ digit'
+input = "12"
+matches = [{ text = "12", values = { n = "12" } }]
+
+[[case]]
+name = "type through parentheses and rules"
+pattern = 'let pid = integer find "pid=" p: (pid)'
+input = "pid=42"
+matches = [{ text = "pid=42", values = { p = 42 } }]
+
+[[case]]
+name = "integer too large becomes a number"
+pattern = 'n: integer'
+input = "99999999999999999999"
+matches = [{ text = "99999999999999999999", values = { n = 1e20 } }]
+
+[[case]]
+name = "typed words work without captures"
+pattern = 'integer "%"'
+input = "50% x%"
+matches = ["50%"]
+
+[[case]]
+name = "error: a capture with two types"
+pattern = '(n: integer) or (n: number)'
+error = "capture `n` has two types"
+
+[[case]]
+name = "error: integer can't name a rule"
+pattern = 'let integer = digit find integer'
+error = "`integer` is a built-in word and can't name a rule"

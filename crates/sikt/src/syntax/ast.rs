@@ -1,4 +1,5 @@
 use crate::class::{CharSet, case_variants};
+use crate::value::CaptureType;
 
 /// A byte range in the pattern source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,6 +53,10 @@ impl Expr {
             },
             ExprKind::Capture { name, body } => ExprKind::Capture {
                 name,
+                body: fold(body),
+            },
+            ExprKind::Typed { ty, body } => ExprKind::Typed {
+                ty,
                 body: fold(body),
             },
             ExprKind::Until(x) => ExprKind::Until(fold(x)),
@@ -150,6 +155,12 @@ pub(crate) enum ExprKind {
     },
     Until(Box<Expr>),
     Through(Box<Expr>),
+    /// `integer` or `number`: matches `body` and gives a capture of it a typed
+    /// value.
+    Typed {
+        ty: CaptureType,
+        body: Box<Expr>,
+    },
     /// `nocase x`, lowered by resolving.
     NoCase(Box<Expr>),
     /// A reference to a `let` rule by name, replaced by resolving.
@@ -185,7 +196,7 @@ impl ExprKind {
                 Some(max) if max == min => Some(body.kind.fixed_len()? * *min as usize),
                 _ => None,
             },
-            ExprKind::Capture { body, .. } => body.kind.fixed_len(),
+            ExprKind::Capture { body, .. } | ExprKind::Typed { body, .. } => body.kind.fixed_len(),
             ExprKind::NoCase(_) | ExprKind::Rule(_) => unreachable!("resolved before analysis"),
         }
     }
@@ -207,7 +218,9 @@ impl ExprKind {
                 }
                 (prefix, true)
             }
-            ExprKind::Capture { body, .. } => body.kind.literal_prefix(),
+            ExprKind::Capture { body, .. } | ExprKind::Typed { body, .. } => {
+                body.kind.literal_prefix()
+            }
             ExprKind::Repeat { min, body, .. } if *min >= 1 => {
                 (body.kind.literal_prefix().0, false)
             }
@@ -223,7 +236,7 @@ impl ExprKind {
             ExprKind::Seq(items) => items.iter().all(|e| e.kind.nullable()),
             ExprKind::Choice(alts) => alts.iter().any(|e| e.kind.nullable()),
             ExprKind::Repeat { min, body, .. } => *min == 0 || body.kind.nullable(),
-            ExprKind::Capture { body, .. } => body.kind.nullable(),
+            ExprKind::Capture { body, .. } | ExprKind::Typed { body, .. } => body.kind.nullable(),
             ExprKind::Until(_) | ExprKind::Anchor(_) | ExprKind::Look { .. } => true,
             ExprKind::Through(x) => x.kind.nullable(),
             ExprKind::Call { nullable, .. } => *nullable,
@@ -236,6 +249,7 @@ impl ExprKind {
             ExprKind::Seq(items) | ExprKind::Choice(items) => items,
             ExprKind::Repeat { body, .. }
             | ExprKind::Capture { body, .. }
+            | ExprKind::Typed { body, .. }
             | ExprKind::Look { body, .. }
             | ExprKind::Until(body)
             | ExprKind::Through(body)
@@ -255,6 +269,7 @@ impl ExprKind {
             ExprKind::Seq(items) | ExprKind::Choice(items) => items,
             ExprKind::Repeat { body, .. }
             | ExprKind::Capture { body, .. }
+            | ExprKind::Typed { body, .. }
             | ExprKind::Look { body, .. }
             | ExprKind::Until(body)
             | ExprKind::Through(body)

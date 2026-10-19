@@ -19,7 +19,7 @@ use std::path::Path;
 
 use libtest_mimic::{Arguments, Failed, Trial};
 use serde::Deserialize;
-use sikt::{Pattern, Program, Template};
+use sikt::{Pattern, Program, Template, Value};
 
 #[derive(Deserialize)]
 struct File {
@@ -64,6 +64,8 @@ enum Expected {
         captures: BTreeMap<String, Capture>,
         #[serde(default)]
         absent: Vec<String>,
+        #[serde(default)]
+        values: BTreeMap<String, toml::Value>,
     },
 }
 
@@ -208,6 +210,7 @@ fn run(case: &Case) -> Result<(), Failed> {
             at,
             captures,
             absent,
+            values,
             ..
         } = e
         else {
@@ -238,6 +241,20 @@ fn run(case: &Case) -> Result<(), Failed> {
                     )
                     .into());
                 }
+            }
+        }
+        for (name, expected) in values {
+            let found = m.value(name);
+            let same = match (expected, found) {
+                (toml::Value::Integer(e), Some(Value::Integer(f))) => *e == f,
+                (toml::Value::Float(e), Some(Value::Number(f))) => *e == f,
+                (toml::Value::String(e), Some(Value::Text(f))) => e == f,
+                _ => false,
+            };
+            if !same {
+                return Err(
+                    format!("value of `{name}`: expected {expected}, found {found:?}").into(),
+                );
             }
         }
         for name in absent {
