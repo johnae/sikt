@@ -114,3 +114,8 @@ error = "pattern is too large"
 name = "number too large"
 pattern = '99999999999 "a"'
 error = "number is too large"
+
+[[case]]
+name = "unquoted equals sign"
+pattern = 'key= 1+ digit'
+error = "expected a pattern, found `=`"

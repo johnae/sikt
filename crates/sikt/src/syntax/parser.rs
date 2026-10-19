@@ -531,6 +531,7 @@ impl Parser<'_> {
                 let help = match tok {
                     Tok::Plus => Some("repetition goes before the thing: `1+ x`"),
                     Tok::Colon => Some("captures are written `name: pattern`"),
+                    Tok::Equals => Some(r#"to match `=`, quote it: "=""#),
                     _ => None,
                 };
                 let error = self.error(
