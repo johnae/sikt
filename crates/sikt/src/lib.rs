@@ -17,6 +17,7 @@ mod class;
 mod compile;
 mod error;
 mod pattern;
+mod prefilter;
 mod syntax;
 mod vm;
 

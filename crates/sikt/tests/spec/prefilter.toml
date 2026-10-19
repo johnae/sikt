@@ -1,0 +1,74 @@
+# Cases where the scan skips ahead to candidate positions. Each checks that
+# no match is lost by skipping.
+
+[[case]]
+name = "literal prefix"
+pattern = '"ERROR" ":" until newline'
+input = "INFO: ok\nERROR: disk\nERR: x\nERROR: net\n"
+matches = [{ text = "ERROR: disk", at = 9 }, { text = "ERROR: net", at = 28 }]
+
+[[case]]
+name = "literal prefix through a capture"
+pattern = 'tag: ("<" 1+ letter) ">"'
+input = "a <b> <cd>"
+matches = [{ text = "<b>", captures = { tag = "<b" } }, { text = "<cd>", captures = { tag = "<cd" } }]
+
+[[case]]
+name = "prefix ends at a repetition"
+pattern = '"ab" 1+ "c"'
+input = "ab abc abcc"
+matches = ["abc", "abcc"]
+
+[[case]]
+name = "one first byte"
+pattern = '"x" digit'
+input = "axb x1 xx2"
+matches = ["x1", "x2"]
+
+[[case]]
+name = "multibyte first character"
+pattern = '"é" digit'
+input = "aé1 e2 é3"
+matches = [{ text = "é1", at = 1 }, { text = "é3", at = 8 }]
+
+[[case]]
+name = "unicode kind first"
+pattern = 'letter digit'
+input = "-- ü1 ß2 3"
+matches = ["ü1", "ß2"]
+
+[[case]]
+name = "optional prefix widens the first set"
+pattern = 'optional "-" 1+ digit'
+input = "a-12 3 -x"
+matches = ["-12", "3"]
+
+[[case]]
+name = "zero-or-more prefix"
+pattern = '0+ digit "x"'
+input = "ab12x x9"
+matches = ["12x", "x"]
+
+[[case]]
+name = "choice of first bytes"
+pattern = '"GET" or "POST" or "PUT" or "DELETE"'
+input = "xPUT DELETE PATCH GET"
+matches = ["PUT", "DELETE", "GET"]
+
+[[case]]
+name = "newline first"
+pattern = 'newline "#"'
+input = "a\n#b\r\n#c\n"
+matches = ["\n#", "\r\n#"]
+
+[[case]]
+name = "starts with until"
+pattern = 'until ":" ":"'
+input = "ab:cd:"
+matches = ["ab:", "cd:"]
+
+[[case]]
+name = "match at the very end"
+pattern = '"z"'
+input = "aaz"
+matches = [{ text = "z", at = 2 }]

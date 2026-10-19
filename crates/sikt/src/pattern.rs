@@ -4,6 +4,7 @@ use std::ops::Range;
 use crate::class::char_len;
 use crate::compile::{Program, compile};
 use crate::error::{Error, MatchError};
+use crate::prefilter::Prefilter;
 use crate::syntax::parse;
 use crate::vm::{self, CaptureEvent, Scratch};
 
@@ -13,6 +14,7 @@ const DEFAULT_MAX_STEPS: u64 = 10_000_000;
 pub struct Pattern {
     source: String,
     program: Program,
+    prefilter: Prefilter,
     max_steps: u64,
 }
 
@@ -42,6 +44,7 @@ impl PatternBuilder {
         Ok(Pattern {
             source: source.to_owned(),
             program,
+            prefilter: Prefilter::new(&expr),
             max_steps: self.max_steps,
         })
     }
@@ -108,8 +111,7 @@ impl<'a> Iterator for FindIter<'a> {
         }
         let hay = self.text.as_bytes();
         let program = &self.pattern.program;
-        while self.pos <= hay.len() {
-            let start = self.pos;
+        while let Some(start) = self.pattern.prefilter.find(hay, self.pos) {
             let step = if start < hay.len() {
                 char_len(&hay[start..])
             } else {
