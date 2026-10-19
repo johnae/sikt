@@ -113,12 +113,17 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(2000))]
 
     #[test]
-    fn agrees_with_regex(items in prop::collection::vec(item(), 1..5), input in "[ab12.\\-xA9 ]{0,30}") {
+    fn agrees_with_regex(
+        items in prop::collection::vec(item(), 1..5),
+        input in "[ab12.\\-xA9 ]{0,30}",
+        case_insensitive: bool,
+    ) {
         let items = repair(items);
         let sikt_src = items.iter().map(Item::sikt).collect::<Vec<_>>().join(" ");
-        let regex_src = items.iter().map(Item::regex).collect::<String>();
+        let flags = if case_insensitive { "(?i)" } else { "" };
+        let regex_src = flags.to_owned() + &items.iter().map(Item::regex).collect::<String>();
 
-        let p = Pattern::new(&sikt_src).unwrap();
+        let p = Pattern::builder().case_insensitive(case_insensitive).build(&sikt_src).unwrap();
         let r = regex::Regex::new(&regex_src).unwrap();
         let sikt: Vec<_> = p.find_iter(&input).map(|m| m.unwrap().range()).collect();
         let regex: Vec<_> = r.find_iter(&input).map(|m| m.range()).collect();

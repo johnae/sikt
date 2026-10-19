@@ -28,6 +28,8 @@ struct Case {
     error: Option<String>,
     label: Option<String>,
     max_steps: Option<u64>,
+    #[serde(default)]
+    case_insensitive: bool,
     match_error: Option<String>,
 }
 
@@ -84,6 +86,7 @@ fn run(case: &Case) -> Result<(), Failed> {
     if let Some(steps) = case.max_steps {
         builder = builder.max_steps(steps);
     }
+    builder = builder.case_insensitive(case.case_insensitive);
     let compiled = builder.build(&case.pattern);
 
     if let Some(expected) = &case.error {

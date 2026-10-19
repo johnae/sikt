@@ -58,14 +58,16 @@ impl Kind {
     }
 }
 
-/// A set of characters: ranges and kinds, possibly negated. Membership of
-/// ASCII characters is precomputed as a bitmap.
+/// A set of characters: ranges and kinds, possibly negated or case-folded.
+/// Membership of ASCII characters is precomputed as a bitmap.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CharSet {
     /// Sorted and non-overlapping.
     ranges: Vec<(char, char)>,
     kinds: Vec<Kind>,
     negated: bool,
+    /// Also match characters whose simple case variant is in the set.
+    fold: bool,
     ascii: u128,
 }
 
@@ -79,16 +81,26 @@ impl CharSet {
                 _ => merged.push((lo, hi)),
             }
         }
-        let mut set = CharSet {
+        CharSet {
             ranges: merged,
             kinds,
             negated,
+            fold: false,
             ascii: 0,
-        };
-        set.ascii = (0..128u8)
-            .filter(|&b| set.matches_slow(b as char))
+        }
+        .with_ascii()
+    }
+
+    /// The set that also matches every simple case variant of its members.
+    pub(crate) fn folded(self) -> Self {
+        CharSet { fold: true, ..self }.with_ascii()
+    }
+
+    fn with_ascii(mut self) -> Self {
+        self.ascii = (0..128u8)
+            .filter(|&b| self.matches_slow(b as char))
             .fold(0, |bits, b| bits | 1 << b);
-        set
+        self
     }
 
     pub(crate) fn kind(kind: Kind) -> Self {
@@ -99,7 +111,7 @@ impl CharSet {
     #[cfg(test)]
     pub(crate) fn as_kind(&self) -> Option<Kind> {
         match self.kinds[..] {
-            [kind] if self.ranges.is_empty() && !self.negated => Some(kind),
+            [kind] if self.ranges.is_empty() && !self.negated && !self.fold => Some(kind),
             _ => None,
         }
     }
@@ -114,6 +126,11 @@ impl CharSet {
     }
 
     fn matches_slow(&self, c: char) -> bool {
+        let found = self.contains(c) || (self.fold && case_variants(c).any(|v| self.contains(v)));
+        found != self.negated
+    }
+
+    fn contains(&self, c: char) -> bool {
         let in_range = self
             .ranges
             .binary_search_by(|&(lo, hi)| {
@@ -126,18 +143,31 @@ impl CharSet {
                 }
             })
             .is_ok();
-        (in_range || self.kinds.iter().any(|k| k.matches(c))) != self.negated
+        in_range || self.kinds.iter().any(|k| k.matches(c))
     }
 
     /// Whether any character outside ASCII can match.
     pub(crate) fn may_match_non_ascii(&self) -> bool {
         self.negated
+            || self.fold
             || self.ranges.last().is_some_and(|&(_, hi)| !hi.is_ascii())
             || self
                 .kinds
                 .iter()
                 .any(|k| !matches!(k, Kind::Digit | Kind::Hex | Kind::Punct))
     }
+}
+
+/// The simple lowercase and uppercase forms of `c`: those that are single
+/// characters. May include `c` itself.
+pub(crate) fn case_variants(c: char) -> impl Iterator<Item = char> {
+    fn single(mut chars: impl Iterator<Item = char>) -> Option<char> {
+        let first = chars.next()?;
+        chars.next().is_none().then_some(first)
+    }
+    [single(c.to_lowercase()), single(c.to_uppercase())]
+        .into_iter()
+        .flatten()
 }
 
 /// Decodes the character at the start of `bytes`, which must not be empty.

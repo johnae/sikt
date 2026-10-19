@@ -1,0 +1,89 @@
+[[case]]
+name = "literal"
+pattern = 'nocase "error"'
+input = "Error ERROR eRRoR err"
+matches = ["Error", "ERROR", "eRRoR"]
+
+[[case]]
+name = "only the next item"
+pattern = 'nocase "a" "b"'
+input = "AB Ab"
+matches = ["Ab"]
+
+[[case]]
+name = "group"
+pattern = 'nocase ("get" or "post") " /"'
+input = "GET / Post / put /"
+matches = ["GET /", "Post /"]
+
+[[case]]
+name = "non-ascii letters"
+pattern = 'nocase "é"'
+input = "É é e"
+matches = ["É", "é"]
+
+[[case]]
+name = "simple folding only"
+pattern = 'nocase "straße"'
+input = "STRASSE Straße STRAßE"
+matches = ["Straße", "STRAßE"]
+
+[[case]]
+name = "kelvin sign folds to k"
+pattern = 'nocase "k"'
+input = "K k K"
+matches = ["K", "k", "K"]
+
+[[case]]
+name = "long s folds to s"
+pattern = 'nocase "s"'
+input = "ſ"
+matches = ["ſ"]
+
+[[case]]
+name = "digits are unchanged"
+pattern = 'nocase "a1"'
+input = "A1 a2"
+matches = ["A1"]
+
+[[case]]
+name = "set range"
+pattern = 'nocase 1+ one of "a".."c"'
+input = "aBcD"
+matches = ["aBc"]
+
+[[case]]
+name = "negated set"
+pattern = 'nocase 1+ none of "x"'
+input = "abXcx"
+matches = ["ab", "c"]
+
+[[case]]
+name = "captures keep the input's case"
+pattern = 'nocase (lvl: "warn")'
+input = "WARN"
+matches = [{ text = "WARN", captures = { lvl = "WARN" } }]
+
+[[case]]
+name = "first-byte prefilter sees both cases"
+pattern = 'nocase "x" digit'
+input = "X1 x2 y3"
+matches = ["X1", "x2"]
+
+[[case]]
+name = "until a case-insensitive literal"
+pattern = 'until nocase "end"'
+input = "abc END"
+matches = [{ text = "abc ", at = 0 }, { text = "", at = 4 }]
+
+[[case]]
+name = "case-insensitive pattern"
+pattern = '"error" ":" 1+ letter'
+case_insensitive = true
+input = "ERROR:Disk error:net"
+matches = ["ERROR:Disk", "error:net"]
+
+[[case]]
+name = "error: nothing after nocase"
+pattern = 'nocase'
+error = "expected a pattern after `nocase`"

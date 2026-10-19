@@ -29,6 +29,7 @@ impl fmt::Debug for Pattern {
 #[derive(Debug, Clone)]
 pub struct PatternBuilder {
     max_steps: u64,
+    case_insensitive: bool,
 }
 
 impl PatternBuilder {
@@ -39,8 +40,18 @@ impl PatternBuilder {
         self
     }
 
+    /// Match the whole pattern case-insensitively, as if it were wrapped in
+    /// `nocase`.
+    pub fn case_insensitive(mut self, yes: bool) -> Self {
+        self.case_insensitive = yes;
+        self
+    }
+
     pub fn build(&self, source: &str) -> Result<Pattern, Error> {
-        let expr = parse(source)?;
+        let mut expr = parse(source)?;
+        if self.case_insensitive {
+            expr = expr.fold_case();
+        }
         let program = compile(&expr, source)?;
         Ok(Pattern {
             source: source.to_owned(),
@@ -60,6 +71,7 @@ impl Pattern {
     pub fn builder() -> PatternBuilder {
         PatternBuilder {
             max_steps: DEFAULT_MAX_STEPS,
+            case_insensitive: false,
         }
     }
 
@@ -301,6 +313,7 @@ mod tests {
             "word end",
             r#"not followed by "a""#,
             "after digit",
+            r#"nocase "ab""#,
         ]);
         let prefix = prop::sample::select(vec![
             "",

@@ -1,4 +1,4 @@
-use crate::class::CharSet;
+use crate::class::{CharSet, case_variants};
 
 /// A byte range in the pattern source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +33,73 @@ pub(crate) struct Expr {
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Expr { kind, span }
+    }
+
+    /// The same pattern, matching case-insensitively with simple case folding.
+    pub fn fold_case(self) -> Expr {
+        let fold = |e: Box<Expr>| Box::new(e.fold_case());
+        let kind = match self.kind {
+            ExprKind::Literal(s) => return fold_literal(&s, self.span),
+            ExprKind::Class(set) => ExprKind::Class(set.folded()),
+            ExprKind::Seq(items) => ExprKind::Seq(items.into_iter().map(Expr::fold_case).collect()),
+            ExprKind::Choice(alts) => {
+                ExprKind::Choice(alts.into_iter().map(Expr::fold_case).collect())
+            }
+            ExprKind::Repeat { min, max, body } => ExprKind::Repeat {
+                min,
+                max,
+                body: fold(body),
+            },
+            ExprKind::Capture { name, body } => ExprKind::Capture {
+                name,
+                body: fold(body),
+            },
+            ExprKind::Until(x) => ExprKind::Until(fold(x)),
+            ExprKind::Through(x) => ExprKind::Through(fold(x)),
+            ExprKind::Look {
+                behind,
+                negated,
+                body,
+            } => ExprKind::Look {
+                behind,
+                negated,
+                body: fold(body),
+            },
+            kind @ (ExprKind::Any | ExprKind::Newline | ExprKind::Anchor(_)) => kind,
+        };
+        Expr::new(kind, self.span)
+    }
+}
+
+/// A literal as a sequence: characters with case become sets of their case
+/// variants, and runs of characters without case stay literal.
+fn fold_literal(s: &str, span: Span) -> Expr {
+    let mut items = Vec::new();
+    let mut plain = String::new();
+    for c in s.chars() {
+        let variants: Vec<char> = case_variants(c).filter(|&v| v != c).collect();
+        if variants.is_empty() {
+            plain.push(c);
+            continue;
+        }
+        if !plain.is_empty() {
+            items.push(Expr::new(
+                ExprKind::Literal(std::mem::take(&mut plain)),
+                span,
+            ));
+        }
+        let ranges = std::iter::once(c).chain(variants).map(|v| (v, v)).collect();
+        items.push(Expr::new(
+            ExprKind::Class(CharSet::new(ranges, Vec::new(), false).folded()),
+            span,
+        ));
+    }
+    if !plain.is_empty() || items.is_empty() {
+        items.push(Expr::new(ExprKind::Literal(plain), span));
+    }
+    match items.len() {
+        1 => items.pop().unwrap(),
+        _ => Expr::new(ExprKind::Seq(items), span),
     }
 }
 

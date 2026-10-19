@@ -9,10 +9,10 @@ const RESERVED: &[&str] = &[
 ];
 
 /// Words in the v1 language that the parser doesn't handle yet.
-const UNSUPPORTED: &[&str] = &["nocase", "let"];
+const UNSUPPORTED: &[&str] = &["let"];
 
 /// Words that can start a pattern; used for "did you mean" suggestions.
-const VOCABULARY: &[&str] = &["any", "newline", "optional", "until", "through"];
+const VOCABULARY: &[&str] = &["any", "newline", "optional", "until", "through", "nocase"];
 
 pub(crate) fn parse(src: &str) -> Result<Expr, Error> {
     let tokens = lex(src)?;
@@ -146,7 +146,7 @@ impl Parser<'_> {
                     body: Box::new(body),
                 }
             }
-            (_, Some(op @ ("optional" | "until" | "through"))) => {
+            (_, Some(op @ ("optional" | "until" | "through" | "nocase"))) => {
                 self.bump();
                 let body =
                     Box::new(self.operand(format!("expected a pattern after `{op}`"), start)?);
@@ -157,7 +157,8 @@ impl Parser<'_> {
                         body,
                     },
                     "until" => ExprKind::Until(body),
-                    _ => ExprKind::Through(body),
+                    "through" => ExprKind::Through(body),
+                    _ => body.fold_case().kind,
                 }
             }
             (_, Some("followed" | "not" | "after")) => self.look(start)?,
