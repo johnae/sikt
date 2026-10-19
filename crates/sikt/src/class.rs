@@ -162,6 +162,17 @@ pub(crate) fn decode(bytes: &[u8]) -> (Option<char>, usize) {
     }
 }
 
+/// Decodes the character that ends `bytes`, which must not be empty. Agrees
+/// with [`decode`]: an invalid byte decodes as `None` with length 1.
+pub(crate) fn decode_last(bytes: &[u8]) -> (Option<char>, usize) {
+    (1..=bytes.len().min(4))
+        .find_map(|len| match decode(&bytes[bytes.len() - len..]) {
+            (Some(c), n) if n == len => Some((Some(c), len)),
+            _ => None,
+        })
+        .unwrap_or((None, 1))
+}
+
 /// Length in bytes of the character at the start of `bytes`.
 #[inline]
 pub(crate) fn char_len(bytes: &[u8]) -> usize {
@@ -181,6 +192,15 @@ mod tests {
         // Truncated sequence and a lone continuation byte.
         assert_eq!(decode(&[0xE2, 0x82]), (None, 1));
         assert_eq!(decode(&[0x82]), (None, 1));
+    }
+
+    #[test]
+    fn decodes_backwards() {
+        assert_eq!(decode_last(b"ab"), (Some('b'), 1));
+        assert_eq!(decode_last("aé".as_bytes()), (Some('é'), 2));
+        assert_eq!(decode_last("😀".as_bytes()), (Some('😀'), 4));
+        assert_eq!(decode_last(&[b'a', 0x82]), (None, 1));
+        assert_eq!(decode_last(&[0xE2, 0x82]), (None, 1));
     }
 
     #[test]

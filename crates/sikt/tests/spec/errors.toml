@@ -10,11 +10,6 @@ pattern = 'foo'
 error = "unknown word `foo`"
 
 [[case]]
-name = "word is not a kind"
-pattern = '1+ word'
-error = "`word` isn't supported yet"
-
-[[case]]
 name = "unterminated string"
 pattern = '"abc'
 error = "unterminated string"

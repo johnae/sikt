@@ -1,9 +1,10 @@
 //! The backtracking VM. Repetition is possessive, so the backtrack stack only
 //! grows with nested choices, not with input length.
 
-use crate::class::{char_len, decode};
+use crate::class::{Kind, char_len, decode, decode_last};
 use crate::compile::{Inst, Program};
 use crate::error::MatchError;
+use crate::syntax::Anchor;
 
 #[derive(Debug, Clone, Copy)]
 struct Frame {
@@ -168,6 +169,7 @@ pub(crate) fn exec(
                 false
             }
             Inst::Fail => false,
+            Inst::Assert(anchor) => holds(anchor, hay, pos),
             Inst::Open(slot) => {
                 captures.push(CaptureEvent {
                     slot,
@@ -196,5 +198,21 @@ pub(crate) fn exec(
             pos = frame.pos;
             captures.truncate(frame.captures);
         }
+    }
+}
+
+fn holds(anchor: Anchor, hay: &[u8], pos: usize) -> bool {
+    let is_word = |c: Option<char>| c.is_some_and(|c| Kind::WordChar.matches(c));
+    let word_before = || pos > 0 && is_word(decode_last(&hay[..pos]).0);
+    let word_after = || pos < hay.len() && is_word(decode(&hay[pos..]).0);
+    match anchor {
+        Anchor::LineStart => pos == 0 || hay[pos - 1] == b'\n',
+        Anchor::LineEnd => {
+            pos == hay.len() || hay[pos..].starts_with(b"\n") || hay[pos..].starts_with(b"\r\n")
+        }
+        Anchor::TextStart => pos == 0,
+        Anchor::TextEnd => pos == hay.len(),
+        Anchor::WordStart => !word_before() && word_after(),
+        Anchor::WordEnd => word_before() && !word_after(),
     }
 }

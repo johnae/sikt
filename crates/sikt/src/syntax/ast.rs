@@ -36,6 +36,17 @@ impl Expr {
     }
 }
 
+/// A zero-width assertion about the position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Anchor {
+    LineStart,
+    LineEnd,
+    TextStart,
+    TextEnd,
+    WordStart,
+    WordEnd,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum ExprKind {
     Literal(String),
@@ -56,6 +67,7 @@ pub(crate) enum ExprKind {
         name: String,
         body: Box<Expr>,
     },
+    Anchor(Anchor),
     Until(Box<Expr>),
     Through(Box<Expr>),
 }
@@ -70,7 +82,7 @@ impl ExprKind {
             ExprKind::Choice(alts) => alts.iter().any(|e| e.kind.nullable()),
             ExprKind::Repeat { min, body, .. } => *min == 0 || body.kind.nullable(),
             ExprKind::Capture { body, .. } => body.kind.nullable(),
-            ExprKind::Until(_) => true,
+            ExprKind::Until(_) | ExprKind::Anchor(_) => true,
             ExprKind::Through(x) => x.kind.nullable(),
         }
     }

@@ -130,6 +130,7 @@ fn first_bytes(e: &Expr) -> (ByteSet, bool) {
             Some(&b) => (ByteSet::of(&[b]), false),
         },
         ExprKind::Any | ExprKind::Until(_) | ExprKind::Through(_) => (ByteSet::full(), true),
+        ExprKind::Anchor(_) => (ByteSet::empty(), true),
         ExprKind::Newline => (ByteSet::of(b"\r\n"), false),
         ExprKind::Class(set) => (ByteSet::of_set(set), false),
         ExprKind::Seq(items) => {
@@ -166,6 +167,7 @@ fn first_bytes(e: &Expr) -> (ByteSet, bool) {
 fn literal_prefix(e: &Expr) -> (String, bool) {
     match &e.kind {
         ExprKind::Literal(s) => (s.clone(), true),
+        ExprKind::Anchor(_) => (String::new(), true),
         ExprKind::Seq(items) => {
             let mut prefix = String::new();
             for item in items {

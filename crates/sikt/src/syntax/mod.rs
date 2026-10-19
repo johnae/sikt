@@ -4,5 +4,5 @@ mod ast;
 mod lexer;
 mod parser;
 
-pub(crate) use ast::{Expr, ExprKind, Span};
+pub(crate) use ast::{Anchor, Expr, ExprKind, Span};
 pub(crate) use parser::parse;

@@ -1,4 +1,4 @@
-use super::ast::{Expr, ExprKind, Span};
+use super::ast::{Anchor, Expr, ExprKind, Span};
 use super::lexer::{Tok, Token, lex};
 use crate::class::{CharSet, Kind};
 use crate::error::Error;
@@ -9,9 +9,7 @@ const RESERVED: &[&str] = &[
 ];
 
 /// Words in the v1 language that the parser doesn't handle yet.
-const UNSUPPORTED: &[&str] = &[
-    "followed", "not", "after", "nocase", "let", "line", "text", "word",
-];
+const UNSUPPORTED: &[&str] = &["followed", "not", "after", "nocase", "let"];
 
 /// Words that can start a pattern; used for "did you mean" suggestions.
 const VOCABULARY: &[&str] = &["any", "newline", "optional", "until", "through"];
@@ -221,6 +219,7 @@ impl Parser<'_> {
                 "any" => ExprKind::Any,
                 "newline" => ExprKind::Newline,
                 "one" | "none" => self.set(token.span, w == "none")?,
+                "line" | "text" | "word" => return self.anchor(&w, token.span),
                 w => match Kind::from_name(w) {
                     Some(kind) => ExprKind::Class(CharSet::kind(kind)),
                     None => return Err(self.word_error(w, token.span)),
@@ -244,6 +243,35 @@ impl Parser<'_> {
             }
         };
         Ok(Expr::new(kind, token.span))
+    }
+
+    /// `start` or `end` after `line`, `text` or `word`.
+    fn anchor(&mut self, word: &str, span: Span) -> Result<Expr, Error> {
+        let end = match self.peek() {
+            Tok::Word(w) if w == "start" => false,
+            Tok::Word(w) if w == "end" => true,
+            _ => {
+                let error = self.error(
+                    format!("expected `start` or `end` after `{word}`"),
+                    span,
+                    None,
+                );
+                return Err(match word {
+                    "word" => error.with_help("for a single word character, use `wordchar`"),
+                    _ => error,
+                });
+            }
+        };
+        let last = self.bump();
+        let anchor = match (word, end) {
+            ("line", false) => Anchor::LineStart,
+            ("line", true) => Anchor::LineEnd,
+            ("text", false) => Anchor::TextStart,
+            ("text", true) => Anchor::TextEnd,
+            (_, false) => Anchor::WordStart,
+            (_, true) => Anchor::WordEnd,
+        };
+        Ok(Expr::new(ExprKind::Anchor(anchor), span.to(last.span)))
     }
 
     /// `one of ...` or `none of ...`, after the `one` or `none`.
@@ -337,11 +365,7 @@ impl Parser<'_> {
             );
         }
         if UNSUPPORTED.contains(&word) {
-            let error = self.error(format!("`{word}` isn't supported yet"), span, None);
-            return match word {
-                "word" => error.with_help("for a single word character, use `wordchar`"),
-                _ => error,
-            };
+            return self.error(format!("`{word}` isn't supported yet"), span, None);
         }
         let label = suggest(word).map(|s| format!("did you mean `{s}`?"));
         self.error(format!("unknown word `{word}`"), span, label)
@@ -402,6 +426,7 @@ mod tests {
                 None => format!("rep{min}+({})", show(body)),
             },
             ExprKind::Capture { name, body } => format!("{name}:({})", show(body)),
+            ExprKind::Anchor(a) => format!("{a:?}"),
             ExprKind::Until(x) => format!("until({})", show(x)),
             ExprKind::Through(x) => format!("through({})", show(x)),
         }

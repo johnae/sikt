@@ -4,7 +4,7 @@ use memchr::memmem::Finder;
 
 use crate::class::CharSet;
 use crate::error::Error;
-use crate::syntax::{Expr, ExprKind};
+use crate::syntax::{Anchor, Expr, ExprKind};
 
 /// Keeps patterns like `1000 (1000 "x")` from exhausting memory.
 const MAX_INSTS: usize = 1 << 20;
@@ -39,6 +39,7 @@ pub(crate) enum Inst {
     /// Pops the backtrack entry, then fails: the negative lookahead matched.
     FailTwice,
     Fail,
+    Assert(Anchor),
     Open(u32),
     Close(u32),
     Match,
@@ -170,6 +171,9 @@ impl Compiler<'_> {
                 self.push(Inst::Open(slot));
                 self.expr(body)?;
                 self.push(Inst::Close(slot));
+            }
+            ExprKind::Anchor(anchor) => {
+                self.push(Inst::Assert(*anchor));
             }
             ExprKind::Until(x) => self.until(x)?,
             ExprKind::Through(x) => {

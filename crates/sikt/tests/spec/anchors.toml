@@ -1,0 +1,75 @@
+[[case]]
+name = "line start"
+pattern = 'line start "#" until (newline or text end)'
+input = "# a\nb # c\r\n#d"
+matches = ["# a", "#d"]
+
+[[case]]
+name = "line end before lf, crlf and the end of text"
+pattern = '"x" line end'
+input = "ax\nbx\r\ncx"
+matches = [{ text = "x", at = 1 }, { text = "x", at = 4 }, { text = "x", at = 8 }]
+
+[[case]]
+name = "empty line starts"
+pattern = 'line start'
+input = "a\nb"
+matches = [{ text = "", at = 0 }, { text = "", at = 2 }]
+
+[[case]]
+name = "text start"
+pattern = 'text start "a"'
+input = "aaa\na"
+matches = [{ text = "a", at = 0 }]
+
+[[case]]
+name = "text end"
+pattern = '"a" text end'
+input = "a\naa"
+matches = [{ text = "a", at = 3 }]
+
+[[case]]
+name = "whole words"
+pattern = 'word start 1+ letter word end'
+input = "foo bar_baz qux9"
+matches = ["foo"]
+
+[[case]]
+name = "word start"
+pattern = 'word start "cat"'
+input = "cat concat cats"
+matches = [{ text = "cat", at = 0 }, { text = "cat", at = 11 }]
+
+[[case]]
+name = "word end"
+pattern = '"cat" word end'
+input = "cat concat cats"
+matches = [{ text = "cat", at = 0 }, { text = "cat", at = 7 }]
+
+[[case]]
+name = "unicode words"
+pattern = 'word start 1+ letter word end'
+input = "ñandú x"
+matches = ["ñandú", "x"]
+
+[[case]]
+name = "anchors before a literal prefix"
+pattern = 'line start "ERROR"'
+input = "ERROR a\nINFO ERROR\nERROR"
+matches = [{ text = "ERROR", at = 0 }, { text = "ERROR", at = 19 }]
+
+[[case]]
+name = "anchor inside a run pattern"
+pattern = '1+ digit word end'
+input = "123 45a 6"
+matches = ["123", "6"]
+
+[[case]]
+name = "error: line needs start or end"
+pattern = 'line "a"'
+error = "expected `start` or `end` after `line`"
+
+[[case]]
+name = "error: word needs start or end"
+pattern = '1+ word'
+error = "expected `start` or `end` after `word`"

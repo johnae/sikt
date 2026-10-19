@@ -297,6 +297,8 @@ mod tests {
             "through digit",
             r#"one of "ab-""#,
             r#"none of (digit "\n")"#,
+            "line start",
+            "word end",
         ]);
         let prefix = prop::sample::select(vec![
             "",
