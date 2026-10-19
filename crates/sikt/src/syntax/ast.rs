@@ -68,11 +68,40 @@ pub(crate) enum ExprKind {
         body: Box<Expr>,
     },
     Anchor(Anchor),
+    /// Checks `body` without consuming input: ahead from the position, or behind
+    /// it for a body of fixed length. Captures inside are dropped.
+    Look {
+        behind: bool,
+        negated: bool,
+        body: Box<Expr>,
+    },
     Until(Box<Expr>),
     Through(Box<Expr>),
 }
 
 impl ExprKind {
+    /// The number of characters every match has, if it's always the same.
+    pub fn fixed_len(&self) -> Option<usize> {
+        match self {
+            ExprKind::Literal(s) => Some(s.chars().count()),
+            ExprKind::Any | ExprKind::Class(_) => Some(1),
+            ExprKind::Anchor(_) | ExprKind::Look { .. } => Some(0),
+            ExprKind::Newline | ExprKind::Until(_) | ExprKind::Through(_) => None,
+            ExprKind::Seq(items) => items.iter().map(|e| e.kind.fixed_len()).sum(),
+            ExprKind::Choice(alts) => {
+                let first = alts[0].kind.fixed_len()?;
+                alts.iter()
+                    .all(|e| e.kind.fixed_len() == Some(first))
+                    .then_some(first)
+            }
+            ExprKind::Repeat { min, max, body } => match max {
+                Some(max) if max == min => Some(body.kind.fixed_len()? * *min as usize),
+                _ => None,
+            },
+            ExprKind::Capture { body, .. } => body.kind.fixed_len(),
+        }
+    }
+
     /// Whether this can succeed without consuming input.
     pub fn nullable(&self) -> bool {
         match self {
@@ -82,7 +111,7 @@ impl ExprKind {
             ExprKind::Choice(alts) => alts.iter().any(|e| e.kind.nullable()),
             ExprKind::Repeat { min, body, .. } => *min == 0 || body.kind.nullable(),
             ExprKind::Capture { body, .. } => body.kind.nullable(),
-            ExprKind::Until(_) | ExprKind::Anchor(_) => true,
+            ExprKind::Until(_) | ExprKind::Anchor(_) | ExprKind::Look { .. } => true,
             ExprKind::Through(x) => x.kind.nullable(),
         }
     }

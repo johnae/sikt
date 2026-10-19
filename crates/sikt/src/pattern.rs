@@ -299,6 +299,8 @@ mod tests {
             r#"none of (digit "\n")"#,
             "line start",
             "word end",
+            r#"not followed by "a""#,
+            "after digit",
         ]);
         let prefix = prop::sample::select(vec![
             "",

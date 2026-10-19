@@ -9,7 +9,7 @@ const RESERVED: &[&str] = &[
 ];
 
 /// Words in the v1 language that the parser doesn't handle yet.
-const UNSUPPORTED: &[&str] = &["followed", "not", "after", "nocase", "let"];
+const UNSUPPORTED: &[&str] = &["nocase", "let"];
 
 /// Words that can start a pattern; used for "did you mean" suggestions.
 const VOCABULARY: &[&str] = &["any", "newline", "optional", "until", "through"];
@@ -47,6 +47,10 @@ impl Parser<'_> {
         self.tokens.get(self.pos + 1).map_or(&Tok::Eof, |t| &t.tok)
     }
 
+    fn is_word(&self, word: &str) -> bool {
+        matches!(self.peek(), Tok::Word(w) if w == word)
+    }
+
     fn span(&self) -> Span {
         self.tokens[self.pos].span
     }
@@ -65,7 +69,7 @@ impl Parser<'_> {
 
     /// `or` as an operator. `or:` starts a capture named `or`.
     fn at_or(&self) -> bool {
-        matches!(self.peek(), Tok::Word(w) if w == "or") && self.peek_second() != &Tok::Colon
+        self.is_word("or") && self.peek_second() != &Tok::Colon
     }
 
     fn at_seq_end(&self) -> bool {
@@ -156,10 +160,45 @@ impl Parser<'_> {
                     _ => ExprKind::Through(body),
                 }
             }
+            (_, Some("followed" | "not" | "after")) => self.look(start)?,
             _ => return self.prim(),
         };
         let end = self.tokens[self.pos - 1].span;
         Ok(Expr::new(kind, start.to(end)))
+    }
+
+    /// `followed by x`, `after x`, and both with `not` before them.
+    fn look(&mut self, start: Span) -> Result<ExprKind, Error> {
+        let negated = self.is_word("not");
+        if negated {
+            self.bump();
+        }
+        let (behind, op) = if self.is_word("after") {
+            self.bump();
+            (true, "after")
+        } else if self.is_word("followed") {
+            self.bump();
+            if !self.is_word("by") {
+                return Err(self.error("expected `by` after `followed`", start, None));
+            }
+            self.bump();
+            (false, "followed by")
+        } else {
+            return Err(self.error("expected `followed by` or `after` after `not`", start, None));
+        };
+        let op_span = start.to(self.tokens[self.pos - 1].span);
+        let body = self.operand(format!("expected a pattern after `{op}`"), op_span)?;
+        if behind && body.kind.fixed_len().is_none() {
+            let label = Some("this can match different numbers of characters".into());
+            return Err(self
+                .error("`after` needs a pattern with a fixed number of characters", body.span, label)
+                .with_help(r#"use exact counts like `3 digit` instead of `1+ digit`; `newline` can be one or two characters"#));
+        }
+        Ok(ExprKind::Look {
+            behind,
+            negated,
+            body: Box::new(body),
+        })
     }
 
     /// The item after a prefix operator, or an error if there is none.
@@ -277,7 +316,7 @@ impl Parser<'_> {
     /// `one of ...` or `none of ...`, after the `one` or `none`.
     fn set(&mut self, start: Span, negated: bool) -> Result<ExprKind, Error> {
         let word = if negated { "none" } else { "one" };
-        if !matches!(self.peek(), Tok::Word(w) if w == "of") {
+        if !self.is_word("of") {
             return Err(self.error(format!("expected `of` after `{word}`"), start, None));
         }
         self.bump();
@@ -427,6 +466,16 @@ mod tests {
             },
             ExprKind::Capture { name, body } => format!("{name}:({})", show(body)),
             ExprKind::Anchor(a) => format!("{a:?}"),
+            ExprKind::Look {
+                behind,
+                negated,
+                body,
+            } => format!(
+                "look{}{}({})",
+                if *negated { "!" } else { "" },
+                if *behind { "<" } else { ">" },
+                show(body)
+            ),
             ExprKind::Until(x) => format!("until({})", show(x)),
             ExprKind::Through(x) => format!("through({})", show(x)),
         }
@@ -446,6 +495,15 @@ mod tests {
         assert_eq!(ast(r#"until "a" or "b""#), r#"or(until("a") "b")"#);
         assert_eq!(ast(r#"n: 1+ digit "px""#), r#"seq(n:(rep1+(digit)) "px")"#);
         assert_eq!(ast("optional 2..3 hex"), "rep0..1(rep2..3(hex))");
+    }
+
+    #[test]
+    fn lookaround_takes_one_item() {
+        assert_eq!(ast(r#"not followed by "a" "b""#), r#"seq(look!>("a") "b")"#);
+        assert_eq!(
+            ast(r#"after 2 digit "x""#),
+            r#"seq(look<(rep2..2(digit)) "x")"#
+        );
     }
 
     #[test]

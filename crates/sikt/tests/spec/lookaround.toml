@@ -1,0 +1,96 @@
+[[case]]
+name = "followed by"
+pattern = '1+ digit followed by "px"'
+input = "12px 13em"
+matches = ["12"]
+
+[[case]]
+name = "not followed by"
+pattern = '1+ digit not followed by "px"'
+input = "12px 13em"
+matches = ["13"]
+
+[[case]]
+name = "lookahead doesn't consume"
+pattern = 'followed by "ab" "a"'
+input = "ab ac"
+matches = [{ text = "a", at = 0 }]
+
+[[case]]
+name = "captures in a lookahead are dropped"
+pattern = '"a" followed by (n: "b")'
+input = "ab"
+matches = [{ text = "a", absent = ["n"] }]
+
+[[case]]
+name = "after"
+pattern = 'after "$" 1+ digit'
+input = "$12 34 $5"
+matches = ["12", "5"]
+
+[[case]]
+name = "not after"
+pattern = 'not after "-" word start 1+ digit'
+input = "-12 34"
+matches = ["34"]
+
+[[case]]
+name = "after a multibyte character"
+pattern = 'after "é" digit'
+input = "é1 e2"
+matches = [{ text = "1", at = 2 }]
+
+[[case]]
+name = "after a choice of equal lengths"
+pattern = 'after ("ab" or "cd") "x"'
+input = "abx cdx adx"
+matches = [{ text = "x", at = 2 }, { text = "x", at = 6 }]
+
+[[case]]
+name = "after a kind"
+pattern = 'after letter digit'
+input = "a1 _2 é3"
+matches = ["1", "3"]
+
+[[case]]
+name = "after at the start of the text"
+pattern = 'after "a" "b"'
+input = "b ab"
+matches = [{ text = "b", at = 3 }]
+
+[[case]]
+name = "not after at the start of the text"
+pattern = 'not after "a" "b"'
+input = "b ab"
+matches = [{ text = "b", at = 0 }]
+
+[[case]]
+name = "after a fixed repetition"
+pattern = 'after (2 digit ":") 2 digit'
+input = "12:34 5:67"
+matches = ["34"]
+
+[[case]]
+name = "error: after needs a fixed length"
+pattern = 'after (1+ digit) "x"'
+error = "`after` needs a pattern with a fixed number of characters"
+
+[[case]]
+name = "error: newline has no fixed length"
+pattern = 'after newline "x"'
+error = "`after` needs a pattern with a fixed number of characters"
+
+[[case]]
+name = "error: followed needs by"
+pattern = 'followed "a"'
+error = "expected `by` after `followed`"
+
+[[case]]
+name = "error: not needs followed by or after"
+pattern = 'not "a"'
+error = "expected `followed by` or `after` after `not`"
+
+[[case]]
+name = "error: nothing after followed by"
+pattern = '"a" followed by'
+error = "expected a pattern after `followed by`"

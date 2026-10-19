@@ -170,6 +170,17 @@ pub(crate) fn exec(
             }
             Inst::Fail => false,
             Inst::Assert(anchor) => holds(anchor, hay, pos),
+            Inst::Behind(n) => {
+                let mut ok = true;
+                for _ in 0..n {
+                    if pos == 0 {
+                        ok = false;
+                        break;
+                    }
+                    pos -= decode_last(&hay[..pos]).1;
+                }
+                ok
+            }
             Inst::Open(slot) => {
                 captures.push(CaptureEvent {
                     slot,

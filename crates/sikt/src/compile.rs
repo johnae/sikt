@@ -40,6 +40,8 @@ pub(crate) enum Inst {
     FailTwice,
     Fail,
     Assert(Anchor),
+    /// Moves back this many characters, failing at the start of the text.
+    Behind(u32),
     Open(u32),
     Close(u32),
     Match,
@@ -175,6 +177,11 @@ impl Compiler<'_> {
             ExprKind::Anchor(anchor) => {
                 self.push(Inst::Assert(*anchor));
             }
+            ExprKind::Look {
+                behind,
+                negated,
+                body,
+            } => self.look(*behind, *negated, body)?,
             ExprKind::Until(x) => self.until(x)?,
             ExprKind::Through(x) => {
                 self.until(x)?;
@@ -242,6 +249,28 @@ impl Compiler<'_> {
                 self.push(Inst::PartialCommit(start));
                 self.patch(choice);
             }
+        }
+        Ok(())
+    }
+
+    fn look(&mut self, behind: bool, negated: bool, body: &Expr) -> Result<(), Error> {
+        let choice = self.push(Inst::Choice(0));
+        if behind {
+            let len = body
+                .kind
+                .fixed_len()
+                .expect("parser checks lookbehind length");
+            self.push(Inst::Behind(len as u32));
+        }
+        self.expr(body)?;
+        if negated {
+            self.push(Inst::FailTwice);
+            self.patch(choice);
+        } else {
+            let ok = self.push(Inst::BackCommit(0));
+            self.patch(choice);
+            self.push(Inst::Fail);
+            self.patch(ok);
         }
         Ok(())
     }
