@@ -5,6 +5,12 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation = "https://docs.rs/sikt"
+readme = "../../README.md"
+keywords = ["pattern", "regex", "peg", "parser", "search"]
+categories = ["text-processing", "parser-implementations"]
 
 [dependencies]
 memchr = "2.8.3"

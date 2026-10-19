@@ -1,0 +1,129 @@
+# Builds the downloads when a tag like v0.2.0 is pushed and puts them on a
+# draft release to check and publish:
+#
+# - Linux: one static binary per CPU that runs on any Linux. It links glibc
+#   statically, not musl: musl's memcpy is slow for small copies, which made
+#   output like --json up to 80% slower.
+#   The flake's `.#static` is the musl build.
+# - macOS: one binary for Apple silicon and Intel.
+#
+# With the CARGO_REGISTRY_TOKEN secret set, it also publishes the crates.
+# Run by hand, it builds the downloads without a release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    strategy:
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      TARGET: ${{ matrix.arch }}-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      # The flag goes to the target only, not to build scripts.
+      - name: build
+        run: |
+          flags=CARGO_TARGET_$(echo "$TARGET" | tr a-z- A-Z_)_RUSTFLAGS
+          export "$flags=-C target-feature=+crt-static"
+          cargo build --locked --profile dist -p sikt-cli --target "$TARGET"
+      - name: static
+        run: |
+          file "target/$TARGET/dist/sikt" | grep -q "static-pie linked"
+          docker run --rm -v "$PWD/target/$TARGET/dist/sikt:/sikt:ro" alpine /sikt --version
+      - name: package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          name=sikt-$version-linux-${{ matrix.arch }}
+          mkdir -p "target/packages/$name"
+          cp "target/$TARGET/dist/sikt" README.md LICENSE-MIT LICENSE-APACHE "target/packages/$name/"
+          "target/packages/$name/sikt" --version
+          tar -C target/packages -czf "target/packages/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-${{ matrix.arch }}
+          path: target/packages/*.tar.gz
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: build
+        run: |
+          for target in aarch64-apple-darwin x86_64-apple-darwin; do
+            cargo build --locked --profile dist -p sikt-cli --target "$target"
+          done
+      - name: package
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          name=sikt-$version-macos
+          mkdir -p "target/packages/$name"
+          lipo -create -output "target/packages/$name/sikt" \
+            target/aarch64-apple-darwin/dist/sikt target/x86_64-apple-darwin/dist/sikt
+          cp README.md LICENSE-MIT LICENSE-APACHE "target/packages/$name/"
+          "target/packages/$name/sikt" --version
+          tar -C target/packages -czf "target/packages/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: target/packages/*.tar.gz
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: packages
+          merge-multiple: true
+      # The same files without the version too, so a link to
+      # releases/latest/download/sikt-linux-x86_64.tar.gz always gets the newest.
+      - name: unversioned names
+        run: |
+          cd packages
+          for file in sikt-*; do
+            cp "$file" "$(echo "$file" | sed 's/^sikt-[0-9][0-9.]*-/sikt-/')"
+          done
+      - name: checksums
+        run: cd packages && sha256sum -- * > SHA256SUMS
+      - name: draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" packages/* --repo "$GITHUB_REPOSITORY" \
+            --draft --title "sikt ${GITHUB_REF_NAME#v}" --generate-notes
+
+  crates:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, macos]
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install
+      # The library first: the command depends on it.
+      - name: publish
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          cargo publish --locked -p sikt
+          cargo publish --locked -p sikt-cli

@@ -56,10 +56,20 @@ no match. closest attempt on line 1:
 
 ## Installation
 
-Requires Rust 1.90 or later.
+Download a binary for Linux (x86_64, aarch64) or macOS from the
+[releases](https://github.com/johnae/sikt/releases). The Linux ones are static and run on any
+distribution.
+
+With Nix:
 
 ```sh
-cargo install --path crates/sikt-cli
+nix run github:johnae/sikt -- --help
+```
+
+With Cargo (Rust 1.90 or later):
+
+```sh
+cargo install sikt-cli
 ```
 
 ## Using the command

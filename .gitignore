@@ -12,3 +12,6 @@ devenv.local.yaml
 # fuzzing
 /fuzz/artifacts
 /fuzz/corpus
+
+# nix build output
+/result*

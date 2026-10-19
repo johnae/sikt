@@ -1,0 +1,43 @@
+# Builds the flake's packages and pushes them to the sikt.cachix.org binary
+# cache, so `nix run github:johnae/sikt` downloads sikt instead of building it.
+name: nix
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            packages: .#default .#static
+          - runner: ubuntu-24.04-arm
+            packages: .#default .#static
+          - runner: macos-latest
+            packages: .#default
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v17
+        with:
+          name: sikt
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - run: nix build --print-build-logs ${{ matrix.packages }}
+      - name: runs
+        run: |
+          for result in result*; do
+            echo 'from 10.0.0.1' | "$result/bin/sikt" -o 'use net find ipv4'
+          done
