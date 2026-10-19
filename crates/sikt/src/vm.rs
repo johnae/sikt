@@ -2,7 +2,7 @@
 //! grows with nested choices, not with input length.
 
 use crate::class::{Kind, char_len, decode, decode_last};
-use crate::compile::{Inst, Program};
+use crate::compile::{Code, Inst};
 use crate::error::MatchError;
 use crate::syntax::Anchor;
 
@@ -40,7 +40,7 @@ pub(crate) struct Scratch {
 }
 
 impl Scratch {
-    pub fn new(program: &Program) -> Self {
+    pub fn new(program: &Code) -> Self {
         Scratch {
             until: vec![None; program.finders.len()],
             ..Scratch::default()
@@ -51,7 +51,7 @@ impl Scratch {
 /// Runs one anchored attempt at `start`. On a match, returns its end and
 /// leaves the capture events in `scratch.captures`.
 pub(crate) fn exec(
-    program: &Program,
+    program: &Code,
     hay: &[u8],
     start: usize,
     scratch: &mut Scratch,

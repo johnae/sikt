@@ -70,3 +70,14 @@ fn warnings() {
         "let unused = \"x\"\nfind 0+ any \"x\" or \"<\" until \">\" or newline"
     ));
 }
+
+#[test]
+fn program_template_error() {
+    let error = sikt::Program::new("find uid: 1+ digit\nwhere uid > 1000\nprint \"{user} {uid}\"")
+        .expect_err("program should fail");
+    let mut out = String::new();
+    GraphicalReportHandler::new_themed(GraphicalTheme::unicode_nocolor())
+        .render_report(&mut out, &error)
+        .unwrap();
+    insta::assert_snapshot!(out);
+}

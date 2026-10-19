@@ -1,0 +1,11 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: out
+---
+  × unknown capture `user`
+   ╭─[pattern:3:9]
+ 2 │ where uid > 1000
+ 3 │ print "{user} {uid}"
+   ·         ────
+   ╰────
+  help: captures in this pattern: uid

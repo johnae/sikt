@@ -17,13 +17,13 @@ pub(crate) enum Inst {
     /// The rest of the input.
     SpanAny,
     Byte(u8),
-    /// The literal at this index in [`Program::literals`].
+    /// The literal at this index in [`Code::literals`].
     Literal(u32),
-    /// One character from the set at this index in [`Program::sets`].
+    /// One character from the set at this index in [`Code::sets`].
     Set(u32),
     /// Zero or more characters from a set, without pushing backtrack entries.
     SpanSet(u32),
-    /// Advances to the next occurrence of [`Program::finders`] at this index,
+    /// Advances to the next occurrence of [`Code::finders`] at this index,
     /// failing if there is none.
     UntilLiteral(u32),
     /// Pushes a backtrack entry that resumes at the target.
@@ -52,7 +52,7 @@ pub(crate) enum Inst {
 }
 
 #[derive(Debug)]
-pub(crate) struct Program {
+pub(crate) struct Code {
     pub insts: Vec<Inst>,
     pub literals: Vec<Box<[u8]>>,
     pub finders: Vec<Finder<'static>>,
@@ -61,13 +61,13 @@ pub(crate) struct Program {
     pub captures: Vec<String>,
 }
 
-pub(crate) fn compile(ast: &Ast, src: &str) -> Result<Program, Error> {
+pub(crate) fn compile(ast: &Ast, src: &str) -> Result<Code, Error> {
     let mut c = Compiler {
         src,
         rules: &ast.rules,
         variants: Vec::new(),
         calls: Vec::new(),
-        program: Program {
+        program: Code {
             insts: Vec::new(),
             literals: Vec::new(),
             finders: Vec::new(),
@@ -102,7 +102,7 @@ struct Compiler<'s> {
     variants: Vec<(usize, bool)>,
     /// Call instructions to point at their variant once it's compiled.
     calls: Vec<(usize, usize)>,
-    program: Program,
+    program: Code,
 }
 
 impl Compiler<'_> {

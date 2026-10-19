@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use super::ast::{Ast, Expr, ExprKind, Span};
+use super::ast::{Ast, Cond, Expr, ExprKind, Span};
 use super::parser::{Parsed, Rule, VOCABULARY};
 use crate::class::Kind;
 use crate::error::Error;
@@ -13,7 +13,11 @@ use crate::error::Error;
 const MAX_NODES: usize = 1 << 20;
 
 pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
-    let Parsed { main, rules } = parsed;
+    let Parsed {
+        main,
+        rules,
+        mut statements,
+    } = parsed;
     let mut index = HashMap::new();
     for (i, rule) in rules.iter().enumerate() {
         if index.insert(rule.name.as_str(), i).is_some() {
@@ -32,6 +36,10 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
     }
     let mut main_refs = Vec::new();
     check_names(src, &main, &index, &mut main_refs)?;
+    statements.filter = map_filter(statements.filter, &mut |e| {
+        check_names(src, &e, &index, &mut main_refs)?;
+        Ok(e)
+    })?;
     let unused_rules = rules
         .iter()
         .enumerate()
@@ -53,6 +61,7 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
         .iter()
         .map(|&i| r.expand(&rules[i].body))
         .collect::<Result<Vec<_>, _>>()?;
+    statements.filter = map_filter(statements.filter, &mut |e| r.expand(&e))?;
 
     // Nullability of recursive rules, as a fixpoint from "not nullable".
     let mut nullable = vec![false; bodies.len()];
@@ -76,11 +85,26 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
         }
     }
 
+    statements.filter = map_filter(statements.filter, &mut |mut e| {
+        set_nullable(&mut e, &nullable);
+        Ok(lower_nocase(e))
+    })?;
     Ok(Ast {
         main: lower_nocase(main),
         rules: bodies.into_iter().map(lower_nocase).collect(),
         unused_rules,
+        statements,
     })
+}
+
+/// Applies `f` to every sub-pattern in a `where` condition.
+fn map_filter(
+    filter: Option<(Span, Cond)>,
+    f: &mut impl FnMut(Expr) -> Result<Expr, Error>,
+) -> Result<Option<(Span, Cond)>, Error> {
+    filter
+        .map(|(span, cond)| Ok((span, cond.try_map_exprs(f)?)))
+        .transpose()
 }
 
 /// Checks that every word names a rule, collecting the rules referenced.

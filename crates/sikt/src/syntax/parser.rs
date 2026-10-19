@@ -1,4 +1,4 @@
-use super::ast::{Anchor, Expr, ExprKind, Span};
+use super::ast::{Anchor, Cond, Expr, ExprKind, Output, Span, Statements, Test};
 use super::lexer::{Tok, Token, lex};
 use crate::class::{CharSet, Kind};
 use crate::error::Error;
@@ -15,7 +15,7 @@ pub(super) const VOCABULARY: &[&str] =
 /// Words with a meaning of their own, which can't name a rule.
 const KEYWORDS: &[&str] = &[
     "or", "one", "none", "of", "followed", "by", "not", "after", "line", "text", "word", "start",
-    "end", "let", "find", "match",
+    "end", "let", "find", "where", "replace", "print", "match",
 ];
 
 /// A `let` rule as written, before its references are resolved.
@@ -25,10 +25,12 @@ pub(crate) struct Rule {
     pub body: Expr,
 }
 
-/// A pattern as written: the expression to find and the `let` rules.
+/// A pattern as written: the expression to find, the `let` rules, and the
+/// program statements.
 pub(crate) struct Parsed {
     pub main: Expr,
     pub rules: Vec<Rule>,
+    pub statements: Statements,
 }
 
 pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
@@ -47,9 +49,43 @@ pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
         Some(p.expr()?)
     };
     let mut rules = Vec::new();
+    let mut statements = Statements::default();
     loop {
         if p.is_word("let") {
             rules.push(p.rule()?);
+        } else if p.is_word("where") {
+            let keyword = p.bump().span;
+            if statements.filter.is_some() {
+                return Err(p
+                    .error("a program has one `where`", keyword, None)
+                    .with_help("combine the conditions with `and`"));
+            }
+            if p.at_seq_end() {
+                return Err(p.error("expected a condition after `where`", keyword, None));
+            }
+            statements.filter = Some((keyword, p.cond()?));
+        } else if p.is_word("replace") || p.is_word("print") {
+            let keyword = p.bump();
+            if statements.output.is_some() {
+                return Err(p.error("a program has one `replace` or `print`", keyword.span, None));
+            }
+            let print = keyword.tok == Tok::Word("print".into());
+            let Tok::Str(template) = p.peek().clone() else {
+                let word = if print { "print" } else { "replace" };
+                let message = format!("expected a template string after `{word}`");
+                return Err(p
+                    .error(message, keyword.span, None)
+                    .with_help(r#"write it like "{year}-{month}""#));
+            };
+            let span = p.bump().span;
+            statements.output = Some((
+                keyword.span,
+                Output {
+                    print,
+                    template,
+                    span,
+                },
+            ));
         } else if p.is_word("find") {
             let find = p.bump();
             if main.is_some() {
@@ -73,7 +109,11 @@ pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
         tok => return Err(p.error(format!("unexpected {}", tok.describe()), p.span(), None)),
     }
     match main {
-        Some(main) => Ok(Parsed { main, rules }),
+        Some(main) => Ok(Parsed {
+            main,
+            rules,
+            statements,
+        }),
         None => {
             let span = Span::new(0, src.trim_end().len());
             Err(p
@@ -126,11 +166,150 @@ impl Parser<'_> {
     /// `let` or `find` starting a statement. Followed by `:` they name a
     /// capture.
     fn at_statement(&self) -> bool {
-        (self.is_word("let") || self.is_word("find")) && self.peek_second() != &Tok::Colon
+        ["let", "find", "where", "replace", "print"]
+            .iter()
+            .any(|w| self.is_word(w))
+            && self.peek_second() != &Tok::Colon
     }
 
     fn at_seq_end(&self) -> bool {
         matches!(self.peek(), Tok::Eof | Tok::RParen) || self.at_or() || self.at_statement()
+    }
+
+    /// A `where` condition: `or` of `and` of `not`, tests and parentheses.
+    fn cond(&mut self) -> Result<Cond, Error> {
+        let mut cond = self.cond_and()?;
+        while self.at_or() {
+            self.bump();
+            cond = Cond::Or(Box::new(cond), Box::new(self.cond_and()?));
+        }
+        Ok(cond)
+    }
+
+    fn cond_and(&mut self) -> Result<Cond, Error> {
+        let mut cond = self.cond_unary()?;
+        while self.is_word("and") {
+            self.bump();
+            cond = Cond::And(Box::new(cond), Box::new(self.cond_unary()?));
+        }
+        Ok(cond)
+    }
+
+    fn cond_unary(&mut self) -> Result<Cond, Error> {
+        if self.is_word("not") {
+            self.bump();
+            return Ok(Cond::Not(Box::new(self.cond_unary()?)));
+        }
+        if self.peek() == &Tok::LParen {
+            let open = self.bump().span;
+            let cond = self.cond()?;
+            if self.peek() != &Tok::RParen {
+                let label = Some("this parenthesis is never closed".into());
+                return Err(self.error("unclosed `(`", open, label));
+            }
+            self.bump();
+            return Ok(cond);
+        }
+        self.test()
+    }
+
+    /// `name is "x"`, `name in (...)`, `name > 5`, `name contains "x"` or
+    /// `name matches (...)`, with `not` where it reads naturally.
+    fn test(&mut self) -> Result<Cond, Error> {
+        let Tok::Word(name) = self.peek().clone() else {
+            let message = format!("expected a capture name, found {}", self.peek().describe());
+            return Err(self.error(message, self.span(), None));
+        };
+        let span = self.bump().span;
+        let mut negated = false;
+        let test = if self.is_word("is") {
+            self.bump();
+            if self.is_word("not") {
+                self.bump();
+                negated = true;
+            }
+            Test::Is(self.string("after `is`")?)
+        } else if self.is_word("in")
+            || (self.is_word("not") && matches!(self.peek_second(), Tok::Word(w) if w == "in"))
+        {
+            negated = self.is_word("not");
+            if negated {
+                self.bump();
+            }
+            self.bump();
+            Test::In(self.string_list()?)
+        } else if let Tok::Cmp(op) = *self.peek() {
+            let op_span = self.bump().span;
+            let value = match self.peek().clone() {
+                Tok::Int(n) => f64::from(n),
+                Tok::Num(n) => n.parse().expect("lexer checks number syntax"),
+                _ => {
+                    let message = format!("expected a number after `{}`", op.symbol());
+                    return Err(self.error(message, op_span, None));
+                }
+            };
+            self.bump();
+            Test::Compare(op, value)
+        } else if self.is_word("contains") {
+            self.bump();
+            Test::Contains(self.string("after `contains`")?)
+        } else if self.is_word("matches") {
+            let keyword = self.bump().span;
+            Test::Matches(self.operand("expected a pattern after `matches`".into(), keyword)?)
+        } else {
+            return Err(self
+                .error(format!("expected a test after `{name}`"), span, None)
+                .with_help("tests are is, is not, in, not in, > >= < <=, contains and matches"));
+        };
+        let capture = (name != "match").then_some(name);
+        let test = Cond::Test {
+            capture,
+            span,
+            test,
+        };
+        Ok(if negated {
+            Cond::Not(Box::new(test))
+        } else {
+            test
+        })
+    }
+
+    fn string(&mut self, after: &str) -> Result<String, Error> {
+        match self.peek().clone() {
+            Tok::Str(s) => {
+                self.bump();
+                Ok(s)
+            }
+            tok => Err(self.error(
+                format!("expected a string {after}, found {}", tok.describe()),
+                self.span(),
+                None,
+            )),
+        }
+    }
+
+    /// `("a" "b" ...)`.
+    fn string_list(&mut self) -> Result<Vec<String>, Error> {
+        let help = r#"write the strings in parentheses, like ("WARN" "ERROR")"#;
+        if self.peek() != &Tok::LParen {
+            return Err(self
+                .error("expected a list of strings", self.span(), None)
+                .with_help(help));
+        }
+        let open = self.bump().span;
+        let mut strings = Vec::new();
+        while let Tok::Str(s) = self.peek().clone() {
+            self.bump();
+            strings.push(s);
+        }
+        if self.peek() != &Tok::RParen {
+            let message = format!("expected a string or `)`, found {}", self.peek().describe());
+            return Err(self
+                .error(message, open.to(self.span()), None)
+                .with_help(help));
+        }
+        self.bump();
+        Ok(strings)
     }
 
     /// `let name = expr`.

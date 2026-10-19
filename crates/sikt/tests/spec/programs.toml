@@ -1,0 +1,193 @@
+# Programs: find with where, replace and print. `program = true` compiles the
+# pattern as a program; `printed` lists the lines a `print` program emits.
+
+[[case]]
+name = "replace"
+program = true
+pattern = 'find "colour" replace "color"'
+input = "colour, Colour, colours"
+output = "color, Colour, colors"
+
+[[case]]
+name = "rules, where and replace"
+program = true
+pattern = '''
+let octet = 1..3 digit
+find  ip: (octet "." octet "." octet "." octet)
+where ip is not "127.0.0.1"
+replace "<{ip}>"
+'''
+input = "127.0.0.1 and 10.0.0.2"
+output = "127.0.0.1 and <10.0.0.2>"
+
+[[case]]
+name = "print"
+program = true
+pattern = '''
+find line start user: until ":" ":" until ":" ":" uid: 1+ digit
+where uid > 1000
+print "{user} {uid}"
+'''
+input = "root:x:0:0\nalice:x:1001:1001\nbob:x:1000:1000\n"
+printed = ["alice 1001"]
+
+[[case]]
+name = "where without an action"
+program = true
+pattern = 'find n: 1+ digit where n >= 10 and n < 100'
+input = "5 10 99 100"
+matches = ["10", "99"]
+
+[[case]]
+name = "string tests"
+program = true
+pattern = 'find "[" lvl: 1+ letter "]" where lvl in ("WARN" "ERROR")'
+input = "[INFO] [WARN] [ERROR] [DEBUG]"
+matches = ["[WARN]", "[ERROR]"]
+
+[[case]]
+name = "not in"
+program = true
+pattern = 'find "[" lvl: 1+ letter "]" where lvl not in ("INFO" "DEBUG")'
+input = "[INFO] [WARN] [DEBUG]"
+matches = ["[WARN]"]
+
+[[case]]
+name = "contains"
+program = true
+pattern = 'find msg: until newline newline where msg contains "timeout"'
+input = "ok\nread timeout\nfine\n"
+matches = ["read timeout\n"]
+
+[[case]]
+name = "matches a sub-pattern"
+program = true
+pattern = 'find path: 1+ none of " " where path matches (until ".rs" ".rs")'
+input = "src/a.rs lib.rsx b.rs"
+matches = ["src/a.rs", "b.rs"]
+
+[[case]]
+name = "matches uses rules"
+program = true
+pattern = 'let hexpair = 2 hex find w: 1+ wordchar where w matches (1+ hexpair)'
+input = "beef bee cafe0 00ff"
+matches = ["beef", "00ff"]
+
+[[case]]
+name = "not, or and parentheses"
+program = true
+pattern = 'find n: 1+ digit where not (n < 5 or n > 8)'
+input = "1 5 7 9"
+matches = ["5", "7"]
+
+[[case]]
+name = "and binds tighter than or"
+program = true
+pattern = 'find n: 1+ digit where n is "1" or n > 5 and n < 7'
+input = "1 2 6 8"
+matches = ["1", "6"]
+
+[[case]]
+name = "negative and decimal numbers"
+program = true
+pattern = 'find n: (optional "-" 1+ digit optional ("." 1+ digit)) where n < -1.5'
+input = "-1 -2 -1.6 3"
+matches = ["-2", "-1.6"]
+
+[[case]]
+name = "non-numbers fail numeric tests"
+program = true
+pattern = 'find w: 1+ wordchar where w > 0'
+input = "abc 12 0"
+matches = ["12"]
+
+[[case]]
+name = "a rejected match still consumes its text"
+program = true
+pattern = 'find w: 1+ letter where w is not "foobar"'
+input = "foobar foo"
+matches = ["foo"]
+
+[[case]]
+name = "where on the whole match"
+program = true
+pattern = 'find 1+ letter where match is "b"'
+input = "a b c"
+matches = ["b"]
+
+[[case]]
+name = "missing capture is empty"
+program = true
+pattern = 'find "a" optional (b: "b") where b is ""'
+input = "a ab"
+matches = ["a"]
+
+[[case]]
+name = "case-insensitive program compares strings without case"
+program = true
+case_insensitive = true
+pattern = 'find "[" lvl: 1+ letter "]" where lvl is "warn"'
+input = "[WARN] [info]"
+matches = ["[WARN]"]
+
+[[case]]
+name = "keywords in captures are fine"
+program = true
+pattern = 'find where: digit print "{where}"'
+input = "a1b2"
+printed = ["1", "2"]
+
+[[case]]
+name = "error: unknown capture in where"
+program = true
+pattern = 'find uid: 1+ digit where id > 5'
+error = "unknown capture `id`"
+label = "did you mean `uid`?"
+
+[[case]]
+name = "error: unknown capture in a template"
+program = true
+pattern = 'find uid: 1+ digit replace "{ud}"'
+error = "unknown capture `ud`"
+label = "did you mean `uid`?"
+
+[[case]]
+name = "error: replace and print"
+program = true
+pattern = 'find "a" replace "b" print "c"'
+error = "a program has one `replace` or `print`"
+
+[[case]]
+name = "error: two wheres"
+program = true
+pattern = 'find n: digit where n > 1 where n < 5'
+error = "a program has one `where`"
+
+[[case]]
+name = "error: replace needs a string"
+program = true
+pattern = 'find "a" replace b'
+error = "expected a template string after `replace`"
+
+[[case]]
+name = "error: comparison needs a number"
+program = true
+pattern = 'find n: digit where n > "5"'
+error = "expected a number after `>`"
+
+[[case]]
+name = "error: unknown test"
+program = true
+pattern = 'find n: digit where n equals "5"'
+error = "expected a test after `n`"
+
+[[case]]
+name = "error: where needs a condition"
+program = true
+pattern = 'find n: digit where'
+error = "expected a condition after `where`"
+
+[[case]]
+name = "error: where in a plain pattern"
+pattern = 'find n: digit where n > 1'
+error = "`where` only works in a program"

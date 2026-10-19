@@ -3,11 +3,12 @@ use std::fmt;
 use std::ops::Range;
 
 use crate::class::char_len;
-use crate::compile::{Program, compile};
+use crate::compile::{Code, compile};
 use crate::error::{Error, MatchError, Warning};
 use crate::lint::lint;
 use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
-use crate::syntax::parse;
+use crate::program::Program;
+use crate::syntax::{Ast, parse};
 use crate::template::Template;
 use crate::vm::{self, CaptureEvent, Limits, Scratch};
 
@@ -19,7 +20,7 @@ const DEFAULT_LIMITS: Limits = Limits {
 /// A compiled pattern. Immutable, and cheap to share between threads.
 pub struct Pattern {
     source: String,
-    program: Program,
+    program: Code,
     prefilter: Prefilter,
     leading_run: Option<LeadingRun>,
     limits: Limits,
@@ -62,20 +63,51 @@ impl PatternBuilder {
     }
 
     pub fn build(&self, source: &str) -> Result<Pattern, Error> {
+        let (pattern, ast) = self.compile(source)?;
+        let statements = &ast.statements;
+        let keyword = statements
+            .filter
+            .as_ref()
+            .map(|(span, _)| (*span, "where"))
+            .or(statements
+                .output
+                .as_ref()
+                .map(|(span, out)| (*span, if out.print { "print" } else { "replace" })));
+        if let Some((span, word)) = keyword {
+            return Err(Error::new(
+                source,
+                format!("`{word}` only works in a program"),
+                span,
+                None,
+            )
+            .with_help("compile it with `Program::new`, or run it with the `sikt` command"));
+        }
+        Ok(pattern)
+    }
+
+    /// Compiles a program: a pattern with `where`, `replace` or `print`.
+    pub fn build_program(&self, source: &str) -> Result<Program, Error> {
+        let (pattern, mut ast) = self.compile(source)?;
+        let statements = std::mem::take(&mut ast.statements);
+        Program::from_parts(pattern, statements, &ast, source, self.case_insensitive)
+    }
+
+    fn compile(&self, source: &str) -> Result<(Pattern, Ast), Error> {
         let mut ast = parse(source)?;
         let warnings = lint(&ast, source);
         if self.case_insensitive {
             ast.main = ast.main.fold_case();
         }
         let program = compile(&ast, source)?;
-        Ok(Pattern {
+        let pattern = Pattern {
             source: source.to_owned(),
             program,
             prefilter: Prefilter::new(&ast.main),
             leading_run: LeadingRun::new(&ast.main),
             limits: self.limits,
             warnings,
-        })
+        };
+        Ok((pattern, ast))
     }
 }
 
@@ -127,23 +159,13 @@ impl Pattern {
     pub fn replace_all_with<'a>(
         &self,
         text: &'a str,
-        mut replace: impl FnMut(&Match, &mut String),
+        replace: impl FnMut(&Match, &mut String),
     ) -> Result<Cow<'a, str>, MatchError> {
-        let mut out = String::new();
-        let mut last = 0;
-        let mut replaced = false;
-        for m in self.find_iter(text) {
-            let m = m?;
-            out.push_str(&text[last..m.start()]);
-            replace(&m, &mut out);
-            last = m.end();
-            replaced = true;
-        }
-        if !replaced {
-            return Ok(Cow::Borrowed(text));
-        }
-        out.push_str(&text[last..]);
-        Ok(Cow::Owned(out))
+        splice(text, self.find_iter(text), replace)
+    }
+
+    pub(crate) fn limits(&self) -> Limits {
+        self.limits
     }
 
     /// All non-overlapping matches, left to right. After an empty match the
@@ -157,6 +179,29 @@ impl Pattern {
             done: false,
         }
     }
+}
+
+/// `text` with each of `matches` replaced by what `replace` writes for it.
+pub(crate) fn splice<'a, 'm>(
+    text: &'a str,
+    matches: impl Iterator<Item = Result<Match<'m>, MatchError>>,
+    mut replace: impl FnMut(&Match, &mut String),
+) -> Result<Cow<'a, str>, MatchError> {
+    let mut out = String::new();
+    let mut last = 0;
+    let mut replaced = false;
+    for m in matches {
+        let m = m?;
+        out.push_str(&text[last..m.start()]);
+        replace(&m, &mut out);
+        last = m.end();
+        replaced = true;
+    }
+    if !replaced {
+        return Ok(Cow::Borrowed(text));
+    }
+    out.push_str(&text[last..]);
+    Ok(Cow::Owned(out))
 }
 
 /// Iterator over the matches in a text. See [`Pattern::find_iter`].

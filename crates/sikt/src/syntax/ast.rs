@@ -270,6 +270,101 @@ impl ExprKind {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CmpOp {
+    Gt,
+    Ge,
+    Lt,
+    Le,
+}
+
+impl CmpOp {
+    pub fn symbol(self) -> &'static str {
+        match self {
+            CmpOp::Gt => ">",
+            CmpOp::Ge => ">=",
+            CmpOp::Lt => "<",
+            CmpOp::Le => "<=",
+        }
+    }
+
+    pub fn holds(self, a: f64, b: f64) -> bool {
+        match self {
+            CmpOp::Gt => a > b,
+            CmpOp::Ge => a >= b,
+            CmpOp::Lt => a < b,
+            CmpOp::Le => a <= b,
+        }
+    }
+}
+
+/// A `where` condition.
+#[derive(Debug, Clone)]
+pub(crate) enum Cond {
+    And(Box<Cond>, Box<Cond>),
+    Or(Box<Cond>, Box<Cond>),
+    Not(Box<Cond>),
+    /// A test on a capture, or on the whole match when `capture` is `None`.
+    Test {
+        capture: Option<String>,
+        span: Span,
+        test: Test,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum Test {
+    Is(String),
+    In(Vec<String>),
+    Compare(CmpOp, f64),
+    Contains(String),
+    /// The sub-pattern matches all of the text.
+    Matches(Expr),
+}
+
+impl Cond {
+    /// Applies `f` to every sub-pattern in the condition.
+    pub fn try_map_exprs<E>(self, f: &mut impl FnMut(Expr) -> Result<Expr, E>) -> Result<Cond, E> {
+        Ok(match self {
+            Cond::And(a, b) => {
+                Cond::And(Box::new(a.try_map_exprs(f)?), Box::new(b.try_map_exprs(f)?))
+            }
+            Cond::Or(a, b) => {
+                Cond::Or(Box::new(a.try_map_exprs(f)?), Box::new(b.try_map_exprs(f)?))
+            }
+            Cond::Not(c) => Cond::Not(Box::new(c.try_map_exprs(f)?)),
+            Cond::Test {
+                capture,
+                span,
+                test: Test::Matches(e),
+            } => Cond::Test {
+                capture,
+                span,
+                test: Test::Matches(f(e)?),
+            },
+            test @ Cond::Test { .. } => test,
+        })
+    }
+}
+
+/// `replace "..."` or `print "..."`.
+#[derive(Debug, Clone)]
+pub(crate) struct Output {
+    pub print: bool,
+    /// The template text, from inside the string.
+    pub template: String,
+    /// The string, quotes included.
+    pub span: Span,
+}
+
+/// The parts that make a pattern a program, with the span of the keyword
+/// that starts each.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Statements {
+    pub filter: Option<(Span, Cond)>,
+    pub output: Option<(Span, Output)>,
+}
+
 /// A resolved pattern: the main expression and the recursive rules it calls.
 #[derive(Debug, Clone)]
 pub(crate) struct Ast {
@@ -277,4 +372,5 @@ pub(crate) struct Ast {
     pub rules: Vec<Expr>,
     /// Rules the main expression never reaches, with the span of their name.
     pub unused_rules: Vec<(String, Span)>,
+    pub statements: Statements,
 }

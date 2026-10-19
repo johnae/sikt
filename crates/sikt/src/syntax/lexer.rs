@@ -1,7 +1,7 @@
 use std::iter::Peekable;
 use std::str::CharIndices;
 
-use super::ast::Span;
+use super::ast::{CmpOp, Span};
 use crate::error::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,6 +9,10 @@ pub(crate) enum Tok {
     Str(String),
     Word(String),
     Int(u32),
+    /// A negative or decimal number, as written. Only conditions use these.
+    Num(String),
+    /// `>`, `>=`, `<` or `<=`.
+    Cmp(CmpOp),
     Plus,
     DotDot,
     Colon,
@@ -25,6 +29,8 @@ impl Tok {
             Tok::Str(s) => format!("{s:?}"),
             Tok::Word(w) => format!("`{w}`"),
             Tok::Int(n) => format!("`{n}`"),
+            Tok::Num(n) => format!("`{n}`"),
+            Tok::Cmp(op) => format!("`{}`", op.symbol()),
             Tok::Plus => "`+`".into(),
             Tok::DotDot => "`..`".into(),
             Tok::Colon => "`:`".into(),
@@ -77,12 +83,32 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 Tok::DotDot
             }
             '0'..='9' => {
-                while chars.next_if(|(_, c)| c.is_ascii_digit()).is_some() {}
+                let decimal = number(src, &mut chars);
                 let span = Span::new(start, offset(src, &mut chars));
-                match src[span.start..span.end].parse() {
-                    Ok(n) => Tok::Int(n),
-                    Err(_) => return Err(Error::new(src, "number is too large", span, None)),
+                let text = &src[span.start..span.end];
+                if decimal {
+                    Tok::Num(text.to_owned())
+                } else {
+                    match text.parse() {
+                        Ok(n) => Tok::Int(n),
+                        Err(_) => return Err(Error::new(src, "number is too large", span, None)),
+                    }
                 }
+            }
+            '-' if src[start + 1..].starts_with(|c: char| c.is_ascii_digit()) => {
+                chars.next();
+                number(src, &mut chars);
+                Tok::Num(src[start..offset(src, &mut chars)].to_owned())
+            }
+            '>' | '<' => {
+                chars.next();
+                let or_equal = chars.next_if(|&(_, c)| c == '=').is_some();
+                Tok::Cmp(match (c, or_equal) {
+                    ('>', false) => CmpOp::Gt,
+                    ('>', true) => CmpOp::Ge,
+                    (_, false) => CmpOp::Lt,
+                    (_, true) => CmpOp::Le,
+                })
             }
             c if c.is_alphabetic() || c == '_' => {
                 while chars
@@ -102,6 +128,19 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, Error> {
         span: end,
     });
     Ok(tokens)
+}
+
+/// Lexes digits, and a fraction like `.5` after them. Returns whether there
+/// was a fraction. A `..` after the digits is left alone.
+fn number(src: &str, chars: &mut Chars) -> bool {
+    while chars.next_if(|(_, c)| c.is_ascii_digit()).is_some() {}
+    let rest = &src[offset(src, chars)..];
+    let fraction = rest.starts_with('.') && rest[1..].starts_with(|c: char| c.is_ascii_digit());
+    if fraction {
+        chars.next();
+        while chars.next_if(|(_, c)| c.is_ascii_digit()).is_some() {}
+    }
+    fraction
 }
 
 fn offset(src: &str, chars: &mut Chars) -> usize {
