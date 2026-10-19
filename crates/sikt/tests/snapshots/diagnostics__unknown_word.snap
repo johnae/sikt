@@ -1,0 +1,11 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render(r#\"year: 4 digts \"-\" 2 digit\"#)"
+---
+  × unknown word `digts`
+   ╭─[pattern:1:9]
+ 1 │ year: 4 digts "-" 2 digit
+   ·         ──┬──
+   ·           ╰── did you mean `digit`?
+   ╰────
+  help: to match the text, quote it: "digts"

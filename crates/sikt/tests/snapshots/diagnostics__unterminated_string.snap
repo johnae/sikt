@@ -1,0 +1,11 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render(r#\"\"[\" until \"]\"#)"
+---
+  × unterminated string
+   ╭─[pattern:1:11]
+ 1 │ "[" until "]
+   ·           ─┬
+   ·            ╰── this string never ends
+   ╰────
+  help: add a closing "

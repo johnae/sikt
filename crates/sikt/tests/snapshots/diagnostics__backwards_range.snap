@@ -1,0 +1,11 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render(\"5..2 digit\")"
+---
+  × range `5..2` is backwards
+   ╭─[pattern:1:1]
+ 1 │ 5..2 digit
+   · ──┬─
+   ·   ╰── the smaller number goes first
+   ╰────
+  help: write `2..5`

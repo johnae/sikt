@@ -1,0 +1,12 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render(\"year: 4 digit\\n\\\"-\\\"\\nmonth: 2 dgit\")"
+---
+  × unknown word `dgit`
+   ╭─[pattern:3:10]
+ 2 │ "-"
+ 3 │ month: 2 dgit
+   ·          ──┬─
+   ·            ╰── did you mean `digit`?
+   ╰────
+  help: to match the text, quote it: "dgit"

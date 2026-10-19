@@ -1,0 +1,59 @@
+[[case]]
+name = "stops before the terminator"
+pattern = '"<" until ">" ">"'
+input = "<a><bc>"
+matches = ["<a>", "<bc>"]
+
+[[case]]
+name = "through includes the terminator"
+pattern = '"<" through ">"'
+input = "<a><bc>"
+matches = ["<a>", "<bc>"]
+
+[[case]]
+name = "fails without a terminator"
+pattern = '"(" until ")"'
+input = "(abc"
+matches = []
+
+[[case]]
+name = "matches empty right before the terminator"
+pattern = 'until ":"'
+input = "user:x"
+matches = [{ text = "user", at = 0 }, { text = "", at = 4 }]
+
+[[case]]
+name = "terminator is a kind"
+pattern = 'until digit'
+input = "abc1"
+matches = [{ text = "abc", at = 0 }, { text = "", at = 3 }]
+
+[[case]]
+name = "terminator is a choice"
+pattern = '"[" until ("]" or newline)'
+input = "[abc\n[de]"
+matches = ["[abc", "[de"]
+
+[[case]]
+name = "until over multibyte text"
+pattern = '"«" until "»" "»"'
+input = "«héé» «😀»"
+matches = ["«héé»", "«😀»"]
+
+[[case]]
+name = "passwd line"
+pattern = 'user: until ":" ":" until ":" ":" uid: 1+ digit'
+input = "root:x:0:0"
+matches = [{ text = "root:x:0", captures = { user = "root", uid = "0" } }]
+
+[[case]]
+name = "terminator spans several characters"
+pattern = 'body: until "*/" "*/"'
+input = "a * b */"
+matches = [{ text = "a * b */", captures = { body = "a * b " } }]
+
+[[case]]
+name = "terminator is a sequence"
+pattern = '"x" until (digit digit)'
+input = "xa1b23"
+matches = ["xa1b"]

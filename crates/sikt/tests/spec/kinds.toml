@@ -1,0 +1,59 @@
+[[case]]
+name = "digit is ascii only"
+pattern = 'digit'
+input = "a1٣"
+matches = ["1"]
+
+[[case]]
+name = "hex"
+pattern = '1+ hex'
+input = "0xBEEF zz"
+matches = ["0", "BEEF"]
+
+[[case]]
+name = "letter is unicode"
+pattern = '1+ letter'
+input = "héllo wörld 42"
+matches = ["héllo", "wörld"]
+
+[[case]]
+name = "upper and lower"
+pattern = 'upper 1+ lower'
+input = "Hello World ABC Éclair"
+matches = ["Hello", "World", "Éclair"]
+
+[[case]]
+name = "wordchar"
+pattern = '1+ wordchar'
+input = "foo_bar-baz9"
+matches = ["foo_bar", "baz9"]
+
+[[case]]
+name = "space excludes line breaks"
+pattern = 'space'
+input = "a b\tc\nd\re"
+matches = [" ", "\t"]
+
+[[case]]
+name = "newline is lf or crlf"
+pattern = 'newline'
+input = "a\r\nb\nc\rd"
+matches = ["\r\n", "\n"]
+
+[[case]]
+name = "punct"
+pattern = '1+ punct'
+input = "a, b!? c"
+matches = [",", "!?"]
+
+[[case]]
+name = "any includes newline"
+pattern = '"a" any "b"'
+input = "a\nb"
+matches = ["a\nb"]
+
+[[case]]
+name = "any is one character"
+pattern = '"<" any ">"'
+input = "<é> <😀>"
+matches = ["<é>", "<😀>"]

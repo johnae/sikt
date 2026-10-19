@@ -1,0 +1,261 @@
+//! AST to VM instructions.
+
+use memchr::memmem::Finder;
+
+use crate::class::Kind;
+use crate::error::Error;
+use crate::syntax::{Expr, ExprKind};
+
+/// Keeps patterns like `1000 (1000 "x")` from exhausting memory.
+const MAX_INSTS: usize = 1 << 20;
+
+/// An instruction. Jump targets are absolute instruction indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Inst {
+    /// One character, or one invalid byte.
+    Any,
+    /// The rest of the input.
+    SpanAny,
+    Byte(u8),
+    /// The literal at this index in [`Program::literals`].
+    Literal(u32),
+    Class(Kind),
+    /// Zero or more of a class, without pushing backtrack entries.
+    SpanClass(Kind),
+    /// Advances to the next occurrence of [`Program::finders`] at this index,
+    /// failing if there is none.
+    UntilLiteral(u32),
+    /// Pushes a backtrack entry that resumes at the target.
+    Choice(usize),
+    /// Pops the backtrack entry and jumps.
+    Commit(usize),
+    /// Updates the top backtrack entry to the current state and jumps: one
+    /// loop iteration done.
+    PartialCommit(usize),
+    /// Pops the backtrack entry, restores its position and jumps: the
+    /// lookahead matched.
+    BackCommit(usize),
+    /// Pops the backtrack entry, then fails: the negative lookahead matched.
+    FailTwice,
+    Fail,
+    Open(u32),
+    Close(u32),
+    Match,
+}
+
+#[derive(Debug)]
+pub(crate) struct Program {
+    pub insts: Vec<Inst>,
+    pub literals: Vec<Box<[u8]>>,
+    pub finders: Vec<Finder<'static>>,
+    /// Capture names, indexed by slot.
+    pub captures: Vec<String>,
+}
+
+pub(crate) fn compile(expr: &Expr, src: &str) -> Result<Program, Error> {
+    let mut c = Compiler {
+        src,
+        program: Program {
+            insts: Vec::new(),
+            literals: Vec::new(),
+            finders: Vec::new(),
+            captures: Vec::new(),
+        },
+    };
+    c.expr(expr)?;
+    c.push(Inst::Match);
+    Ok(c.program)
+}
+
+struct Compiler<'s> {
+    src: &'s str,
+    program: Program,
+}
+
+impl Compiler<'_> {
+    fn push(&mut self, inst: Inst) -> usize {
+        self.program.insts.push(inst);
+        self.program.insts.len() - 1
+    }
+
+    fn here(&self) -> usize {
+        self.program.insts.len()
+    }
+
+    /// Points the jump at `at` to the next instruction.
+    fn patch(&mut self, at: usize) {
+        let target = self.here();
+        match &mut self.program.insts[at] {
+            Inst::Choice(t) | Inst::Commit(t) | Inst::PartialCommit(t) | Inst::BackCommit(t) => {
+                *t = target
+            }
+            inst => unreachable!("patching {inst:?}"),
+        }
+    }
+
+    fn literal(&mut self, s: &str) {
+        match s.as_bytes() {
+            [] => {}
+            &[b] => {
+                self.push(Inst::Byte(b));
+            }
+            bytes => {
+                self.program.literals.push(bytes.into());
+                self.push(Inst::Literal(self.program.literals.len() as u32 - 1));
+            }
+        }
+    }
+
+    fn slot(&mut self, name: &str) -> u32 {
+        let captures = &mut self.program.captures;
+        let slot = captures.iter().position(|n| n == name).unwrap_or_else(|| {
+            captures.push(name.to_owned());
+            captures.len() - 1
+        });
+        slot as u32
+    }
+
+    fn expr(&mut self, e: &Expr) -> Result<(), Error> {
+        match &e.kind {
+            ExprKind::Literal(s) => self.literal(s),
+            ExprKind::Any => {
+                self.push(Inst::Any);
+            }
+            ExprKind::Newline => {
+                let choice = self.push(Inst::Choice(0));
+                self.literal("\r\n");
+                let commit = self.push(Inst::Commit(0));
+                self.patch(choice);
+                self.literal("\n");
+                self.patch(commit);
+            }
+            ExprKind::Kind(k) => {
+                self.push(Inst::Class(*k));
+            }
+            ExprKind::Seq(items) => {
+                for item in items {
+                    self.expr(item)?;
+                }
+            }
+            ExprKind::Choice(alts) => {
+                let (last, rest) = alts.split_last().expect("choice has alternatives");
+                let mut commits = Vec::new();
+                for alt in rest {
+                    let choice = self.push(Inst::Choice(0));
+                    self.expr(alt)?;
+                    commits.push(self.push(Inst::Commit(0)));
+                    self.patch(choice);
+                }
+                self.expr(last)?;
+                for commit in commits {
+                    self.patch(commit);
+                }
+            }
+            ExprKind::Repeat { min, max, body } => self.repeat(*min, *max, body)?,
+            ExprKind::Capture { name, body } => {
+                let slot = self.slot(name);
+                self.push(Inst::Open(slot));
+                self.expr(body)?;
+                self.push(Inst::Close(slot));
+            }
+            ExprKind::Until(x) => self.until(x)?,
+            ExprKind::Through(x) => {
+                self.until(x)?;
+                self.expr(x)?;
+            }
+        }
+        if self.here() > MAX_INSTS {
+            let label = Some("expands to too many instructions".into());
+            return Err(Error::new(self.src, "pattern is too large", e.span, label)
+                .with_help("use smaller repetition counts"));
+        }
+        Ok(())
+    }
+
+    fn repeat(&mut self, min: u32, max: Option<u32>, body: &Expr) -> Result<(), Error> {
+        for _ in 0..min {
+            self.expr(body)?;
+        }
+        match max {
+            None => {
+                if body.kind.nullable() {
+                    let label = Some("this can match without consuming anything".into());
+                    return Err(Error::new(
+                        self.src,
+                        "repetition would loop forever",
+                        body.span,
+                        label,
+                    )
+                    .with_help("make the repeated part match at least one character"));
+                }
+                self.star(body)?;
+            }
+            Some(max) => {
+                // Each optional copy jumps to the end on failure, so once one
+                // fails no later copy is tried.
+                let mut choices = Vec::new();
+                for _ in min..max {
+                    choices.push(self.push(Inst::Choice(0)));
+                    self.expr(body)?;
+                    let commit = self.push(Inst::Commit(0));
+                    self.patch(commit);
+                }
+                for choice in choices {
+                    self.patch(choice);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Zero or more, possessive.
+    fn star(&mut self, body: &Expr) -> Result<(), Error> {
+        match body.kind {
+            ExprKind::Kind(k) => {
+                self.push(Inst::SpanClass(k));
+            }
+            ExprKind::Any => {
+                self.push(Inst::SpanAny);
+            }
+            _ => {
+                let choice = self.push(Inst::Choice(0));
+                let start = self.here();
+                self.expr(body)?;
+                self.push(Inst::PartialCommit(start));
+                self.patch(choice);
+            }
+        }
+        Ok(())
+    }
+
+    /// `(not followed by x any)* followed by x`.
+    fn until(&mut self, x: &Expr) -> Result<(), Error> {
+        if let ExprKind::Literal(s) = &x.kind
+            && !s.is_empty()
+        {
+            self.program
+                .finders
+                .push(Finder::new(s.as_bytes()).into_owned());
+            self.push(Inst::UntilLiteral(self.program.finders.len() as u32 - 1));
+            return Ok(());
+        }
+
+        let exit = self.push(Inst::Choice(0));
+        let start = self.here();
+        let not_x = self.push(Inst::Choice(0));
+        self.expr(x)?;
+        self.push(Inst::FailTwice);
+        self.patch(not_x);
+        self.push(Inst::Any);
+        self.push(Inst::PartialCommit(start));
+        self.patch(exit);
+
+        let lookahead = self.push(Inst::Choice(0));
+        self.expr(x)?;
+        let ok = self.push(Inst::BackCommit(0));
+        self.patch(lookahead);
+        self.push(Inst::Fail);
+        self.patch(ok);
+        Ok(())
+    }
+}

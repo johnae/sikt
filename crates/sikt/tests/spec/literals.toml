@@ -1,0 +1,50 @@
+[[case]]
+name = "double quotes"
+pattern = '"abc"'
+input = "xxabcxxabc"
+matches = [{ text = "abc", at = 2 }, { text = "abc", at = 7 }]
+
+[[case]]
+name = "single quotes"
+pattern = "'abc'"
+input = "abc"
+matches = ["abc"]
+
+[[case]]
+name = "escapes"
+pattern = '"a\tb\\c\"d"'
+input = "a\tb\\c\"d"
+matches = ["a\tb\\c\"d"]
+
+[[case]]
+name = "unicode escape"
+pattern = '"\u{e9}"'
+input = "café"
+matches = [{ text = "é", at = 3 }]
+
+[[case]]
+name = "matches don't overlap"
+pattern = '"aa"'
+input = "aaaaa"
+matches = ["aa", "aa"]
+
+[[case]]
+name = "sequence"
+pattern = '"a" "b"'
+input = "ab a b"
+matches = ["ab"]
+
+[[case]]
+name = "whitespace and comments are ignored"
+pattern = '''
+"a"   # first
+  "b" # second
+'''
+input = "ab"
+matches = ["ab"]
+
+[[case]]
+name = "empty literal matches at every position"
+pattern = '""'
+input = "ab"
+matches = [{ text = "", at = 0 }, { text = "", at = 1 }, { text = "", at = 2 }]

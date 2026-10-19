@@ -1,0 +1,121 @@
+[[case]]
+name = "unknown word with a suggestion"
+pattern = 'year: 4 digts'
+error = "unknown word `digts`"
+label = "did you mean `digit`?"
+
+[[case]]
+name = "unknown word"
+pattern = 'foo'
+error = "unknown word `foo`"
+
+[[case]]
+name = "word is not a kind"
+pattern = '1+ word'
+error = "`word` isn't supported yet"
+
+[[case]]
+name = "unterminated string"
+pattern = '"abc'
+error = "unterminated string"
+label = "this string never ends"
+
+[[case]]
+name = "unknown escape"
+pattern = '"\q"'
+error = 'unknown escape `\q`'
+
+[[case]]
+name = "invalid unicode escape"
+pattern = '"\u{110000}"'
+error = "invalid unicode escape"
+
+[[case]]
+name = "regex star"
+pattern = '"a"*'
+error = "unexpected `*`"
+
+[[case]]
+name = "regex dot"
+pattern = '"a" . "b"'
+error = "unexpected `.`"
+
+[[case]]
+name = "plus after the thing"
+pattern = 'digit +'
+error = "expected a pattern, found `+`"
+
+[[case]]
+name = "backwards range"
+pattern = '5..2 digit'
+error = "range `5..2` is backwards"
+
+[[case]]
+name = "nothing to repeat"
+pattern = '"a" 3'
+error = "expected something to repeat after `3`"
+
+[[case]]
+name = "nothing after until"
+pattern = 'until'
+error = "expected a pattern after `until`"
+
+[[case]]
+name = "nothing to capture"
+pattern = '"a" (n:)'
+error = "expected a pattern to capture after `n:`"
+
+[[case]]
+name = "unclosed parenthesis"
+pattern = '("a" "b"'
+error = "unclosed `(`"
+
+[[case]]
+name = "unmatched parenthesis"
+pattern = '"a")'
+error = "unmatched `)`"
+
+[[case]]
+name = "nothing after or"
+pattern = '"a" or'
+error = "expected a pattern after `or`"
+
+[[case]]
+name = "nothing before or"
+pattern = 'or "a"'
+error = "expected a pattern before `or`"
+
+[[case]]
+name = "empty pattern"
+pattern = '  # just a comment'
+error = "empty pattern"
+
+[[case]]
+name = "empty parentheses"
+pattern = '()'
+error = "expected a pattern, found `)`"
+
+[[case]]
+name = "repetition that loops forever"
+pattern = '0+ optional "a"'
+error = "repetition would loop forever"
+
+[[case]]
+name = "reserved word"
+pattern = 'use "x"'
+error = "`use` is reserved for a future version of sikt"
+
+[[case]]
+name = "match is not a capture name"
+pattern = 'match: "a"'
+error = "`match` can't be a capture name"
+
+[[case]]
+name = "pattern too large"
+pattern = '1000 (1000 (1000 "a"))'
+error = "pattern is too large"
+
+[[case]]
+name = "number too large"
+pattern = '99999999999 "a"'
+error = "number is too large"

@@ -1,0 +1,35 @@
+[[case]]
+name = "first alternative wins"
+pattern = '"a" or "ab"'
+input = "ab"
+matches = ["a"]
+
+[[case]]
+name = "longer alternative first"
+pattern = '"ab" or "a"'
+input = "ab a"
+matches = ["ab", "a"]
+
+[[case]]
+name = "no backtracking into a choice"
+pattern = '("a" or "ab") "c"'
+input = "abc ac"
+matches = ["ac"]
+
+[[case]]
+name = "sequence binds tighter than or"
+pattern = '"a" "b" or "c"'
+input = "ab c ac"
+matches = ["ab", "c", "c"]
+
+[[case]]
+name = "kinds and literals"
+pattern = 'digit or "x"'
+input = "a1x"
+matches = ["1", "x"]
+
+[[case]]
+name = "three alternatives"
+pattern = '"GET" or "POST" or "PUT"'
+input = "PUT POST GET PATCH"
+matches = ["PUT", "POST", "GET"]

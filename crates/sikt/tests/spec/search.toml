@@ -1,0 +1,30 @@
+[[case]]
+name = "empty matches between characters"
+pattern = 'optional "a"'
+input = "ba"
+matches = [{ text = "", at = 0 }, { text = "a", at = 1 }, { text = "", at = 2 }]
+
+[[case]]
+name = "empty match advances one character"
+pattern = '""'
+input = "é"
+matches = [{ text = "", at = 0 }, { text = "", at = 2 }]
+
+[[case]]
+name = "no match"
+pattern = '"z"'
+input = "abc"
+matches = []
+
+[[case]]
+name = "empty input"
+pattern = '1+ digit'
+input = ""
+matches = []
+
+[[case]]
+name = "step budget"
+pattern = '1+ ("a" or "b")'
+input = "abababababababab"
+max_steps = 10
+match_error = "pattern exceeded its step budget of 10 steps"

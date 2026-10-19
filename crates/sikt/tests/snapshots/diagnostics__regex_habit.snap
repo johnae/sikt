@@ -1,0 +1,10 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render(r#\"digit* \"x\"\"#)"
+---
+  × unexpected `*`
+   ╭─[pattern:1:6]
+ 1 │ digit* "x"
+   ·      ─
+   ╰────
+  help: repetition goes before the thing: `0+ x` or `1+ x`

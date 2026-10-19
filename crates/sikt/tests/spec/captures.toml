@@ -1,0 +1,65 @@
+[[case]]
+name = "named captures"
+pattern = 'year: 4 digit "-" month: 2 digit'
+input = "on 2026-10"
+matches = [{ text = "2026-10", at = 3, captures = { year = "2026", month = "10" } }]
+
+[[case]]
+name = "a capture takes one item"
+pattern = 'n: 1+ digit "px"'
+input = "12px"
+matches = [{ text = "12px", captures = { n = "12" } }]
+
+[[case]]
+name = "parentheses capture a sequence"
+pattern = 'ip: (1+ digit "." 1+ digit)'
+input = "at 10.2!"
+matches = [{ text = "10.2", captures = { ip = "10.2" } }]
+
+[[case]]
+name = "repetition records every occurrence"
+pattern = '1+ (d: digit)'
+input = "123"
+matches = [{ text = "123", captures = { d = ["1", "2", "3"] } }]
+
+[[case]]
+name = "optional capture that didn't participate"
+pattern = '"a" optional (b: "b")'
+input = "a ab"
+matches = [{ text = "a", absent = ["b"] }, { text = "ab", captures = { b = "b" } }]
+
+[[case]]
+name = "captures in a failed alternative are dropped"
+pattern = '(x: "a" "z") or (y: "a")'
+input = "ab"
+matches = [{ text = "a", absent = ["x"], captures = { y = "a" } }]
+
+[[case]]
+name = "captures in the until lookahead are dropped"
+pattern = 'until (n: digit)'
+input = "ab1"
+matches = [{ text = "ab", absent = ["n"] }, { text = "", at = 2, absent = ["n"] }]
+
+[[case]]
+name = "through keeps the terminator's captures"
+pattern = 'through (n: digit)'
+input = "ab1"
+matches = [{ text = "ab1", captures = { n = "1" } }]
+
+[[case]]
+name = "same name in two alternatives"
+pattern = '(n: digit) or (n: letter)'
+input = "1a"
+matches = [{ text = "1", captures = { n = "1" } }, { text = "a", captures = { n = "a" } }]
+
+[[case]]
+name = "keywords work as capture names"
+pattern = 'text: 1+ letter ":" any: digit'
+input = "abc:1"
+matches = [{ text = "abc:1", captures = { text = "abc", any = "1" } }]
+
+[[case]]
+name = "nested captures"
+pattern = 'date: (year: 4 digit "-" 2 digit)'
+input = "2026-10"
+matches = [{ text = "2026-10", captures = { date = "2026-10", year = "2026" } }]

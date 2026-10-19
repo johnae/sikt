@@ -1,0 +1,11 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render(r#\"1+ (optional \"-\" 0+ digit)\"#)"
+---
+  × repetition would loop forever
+   ╭─[pattern:1:4]
+ 1 │ 1+ (optional "-" 0+ digit)
+   ·    ───────────┬───────────
+   ·               ╰── this can match without consuming anything
+   ╰────
+  help: make the repeated part match at least one character
