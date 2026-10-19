@@ -16,24 +16,41 @@ use std::fmt;
 #[derive(Debug, Clone)]
 pub struct Explanation<'a> {
     text: &'a str,
+    start: usize,
     position: usize,
     expected: Vec<String>,
     matched: Vec<String>,
+    first_line: usize,
 }
 
 impl<'a> Explanation<'a> {
     pub(crate) fn new(
         text: &'a str,
+        start: usize,
         position: usize,
         expected: Vec<String>,
         matched: Vec<String>,
     ) -> Self {
         Explanation {
             text,
+            start,
             position,
             expected,
             matched,
+            first_line: 1,
         }
+    }
+
+    /// Numbers lines from `line` instead of 1, for a text that is part of a
+    /// larger one, like a single line of a file.
+    pub fn first_line(mut self, line: usize) -> Self {
+        self.first_line = line;
+        self
+    }
+
+    /// Byte offset where the closest attempt started.
+    pub fn start(&self) -> usize {
+        self.start
     }
 
     /// Byte offset where the closest attempt failed.
@@ -53,7 +70,7 @@ impl<'a> Explanation<'a> {
 
     /// The 1-based line of [`position`](Self::position).
     pub fn line(&self) -> usize {
-        self.text[..self.position].matches('\n').count() + 1
+        self.text[..self.position].matches('\n').count() + self.first_line
     }
 }
 
@@ -107,5 +124,23 @@ fn or_list(items: &[String]) -> String {
         [] => String::new(),
         [only] => only.clone(),
         [rest @ .., last] => format!("{} or {last}", rest.join(", ")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Pattern;
+
+    #[test]
+    fn start_and_line_numbers() {
+        let p = Pattern::new(r#""x" 3 digit"#).unwrap();
+        let e = p.explain("ab x12a").unwrap().unwrap();
+        assert_eq!((e.start(), e.position(), e.line()), (3, 6, 1));
+        let e = e.first_line(7);
+        assert_eq!(e.line(), 7);
+        assert!(
+            e.to_string()
+                .starts_with("no match. closest attempt on line 7:")
+        );
     }
 }

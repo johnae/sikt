@@ -39,6 +39,7 @@ impl fmt::Debug for Pattern {
 pub struct PatternBuilder {
     limits: Limits,
     case_insensitive: bool,
+    line_mode: bool,
 }
 
 impl PatternBuilder {
@@ -60,6 +61,13 @@ impl PatternBuilder {
     /// `nocase`.
     pub fn case_insensitive(mut self, yes: bool) -> Self {
         self.case_insensitive = yes;
+        self
+    }
+
+    /// The pattern will run on single lines without their line break, as the
+    /// `sikt` command does by default. Only affects warnings.
+    pub fn line_mode(mut self, yes: bool) -> Self {
+        self.line_mode = yes;
         self
     }
 
@@ -95,7 +103,7 @@ impl PatternBuilder {
 
     fn compile(&self, source: &str) -> Result<(Pattern, Ast), Error> {
         let mut ast = parse(source)?;
-        let warnings = lint(&ast, source);
+        let warnings = lint(&ast, source, self.line_mode);
         if self.case_insensitive {
             ast.main = ast.main.fold_case();
         }
@@ -121,6 +129,7 @@ impl Pattern {
         PatternBuilder {
             limits: DEFAULT_LIMITS,
             case_insensitive: false,
+            line_mode: false,
         }
     }
 
@@ -177,6 +186,7 @@ impl Pattern {
         let mut scratch = Scratch::new(&self.program);
         // The attempt that got farthest from where it started; the first wins ties.
         let mut best = Trace::default();
+        let mut best_start = 0;
         let mut best_progress = None;
         let mut pos = 0;
         while pos <= hay.len() {
@@ -195,6 +205,7 @@ impl Pattern {
             let progress = trace.farthest.map(|f| f - pos);
             if progress > best_progress {
                 best_progress = progress;
+                best_start = pos;
                 best = trace;
             }
             pos += if pos < hay.len() {
@@ -219,6 +230,7 @@ impl Pattern {
         }
         Ok(Some(Explanation::new(
             text,
+            best_start,
             best.farthest.unwrap_or(0),
             expected,
             matched,

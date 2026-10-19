@@ -4,9 +4,11 @@ use crate::class::CharSet;
 use crate::error::Warning;
 use crate::syntax::{Ast, Expr, ExprKind};
 
-pub(crate) fn lint(ast: &Ast, src: &str) -> Vec<Warning> {
+/// In `line_mode` the pattern runs on single lines, so `newline` can't match.
+pub(crate) fn lint(ast: &Ast, src: &str, line_mode: bool) -> Vec<Warning> {
     let mut linter = Linter {
         src,
+        line_mode,
         warnings: Vec::new(),
     };
     linter.expr(&ast.main);
@@ -35,6 +37,7 @@ pub(crate) fn lint(ast: &Ast, src: &str) -> Vec<Warning> {
 
 struct Linter<'s> {
     src: &'s str,
+    line_mode: bool,
     warnings: Vec<Warning>,
 }
 
@@ -55,6 +58,15 @@ impl Linter<'_> {
                 self.until_in_choice(alts);
             }
             ExprKind::Seq(items) => self.possessive_traps(items),
+            ExprKind::Newline if self.line_mode => {
+                let message =
+                    "`newline` never matches in line mode, where lines have no line break";
+                self.warn(
+                    message.into(),
+                    e,
+                    "use `line end`, or match across lines with -U",
+                );
+            }
             ExprKind::Until(x) | ExprKind::Through(x) if never_fails(x) => {
                 let keyword = if matches!(e.kind, ExprKind::Until(_)) {
                     "until"

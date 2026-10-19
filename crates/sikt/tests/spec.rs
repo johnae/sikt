@@ -48,6 +48,8 @@ struct Case {
     explain: Option<String>,
     #[serde(default)]
     case_insensitive: bool,
+    #[serde(default)]
+    line_mode: bool,
     match_error: Option<String>,
 }
 
@@ -107,7 +109,9 @@ fn run(case: &Case) -> Result<(), Failed> {
     if let Some(depth) = case.max_depth {
         builder = builder.max_depth(depth);
     }
-    builder = builder.case_insensitive(case.case_insensitive);
+    builder = builder
+        .case_insensitive(case.case_insensitive)
+        .line_mode(case.line_mode);
     if case.program {
         return run_program(case, builder.build_program(&case.pattern));
     }

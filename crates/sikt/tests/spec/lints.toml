@@ -105,3 +105,18 @@ pattern = 'line start "#" until (newline or text end)'
 input = "#a\n"
 matches = ["#a"]
 warnings = []
+
+[[case]]
+name = "newline in line mode"
+pattern = '"a" newline'
+line_mode = true
+input = "a"
+matches = []
+warnings = ["`newline` never matches in line mode, where lines have no line break"]
+
+[[case]]
+name = "newline outside line mode is fine"
+pattern = '"a" newline'
+input = "a\n"
+matches = ["a\n"]
+warnings = []
