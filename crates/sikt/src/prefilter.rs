@@ -277,7 +277,7 @@ mod tests {
     use crate::syntax::parse;
 
     fn prefilter(src: &str) -> String {
-        match Prefilter::new(&parse(src).unwrap().main) {
+        match Prefilter::new(&parse(src, None).unwrap().0.main) {
             Prefilter::None => "none".into(),
             Prefilter::Byte(a) => format!("byte {:?}", a as char),
             Prefilter::Byte2(a, b) => format!("bytes {:?} {:?}", a as char, b as char),

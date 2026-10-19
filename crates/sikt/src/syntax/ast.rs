@@ -13,6 +13,11 @@ impl Span {
         Span { start, end }
     }
 
+    /// The span moved `by` bytes later.
+    pub fn shifted(self, by: usize) -> Span {
+        Span::new(self.start + by, self.end + by)
+    }
+
     /// The span from the start of `self` to the end of `other`.
     pub fn to(self, other: Span) -> Span {
         Span::new(self.start, other.end)
@@ -34,6 +39,23 @@ pub(crate) struct Expr {
 impl Expr {
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Expr { kind, span }
+    }
+
+    /// Gives every part of `self` the span `span`, so errors and explanations
+    /// name the whole instead of its parts.
+    pub fn respan(&mut self, span: Span) {
+        self.span = span;
+        for child in self.kind.children_mut() {
+            child.respan(span);
+        }
+    }
+
+    /// Moves every span in `self` `by` bytes later.
+    pub fn shift(&mut self, by: usize) {
+        self.span = self.span.shifted(by);
+        for child in self.kind.children_mut() {
+            child.shift(by);
+        }
     }
 
     /// The same pattern, matching case-insensitively with simple case folding.

@@ -1,0 +1,27 @@
+# Network addresses. Rules have no captures: name what you capture, like
+# `addr: ipv4`.
+
+let octet = "25" one of "0".."5" or "2" one of "0".."4" digit or "1" 2 digit or 1..2 digit
+let ipv4  = not after digit octet "." octet "." octet "." octet not followed by digit
+
+# Groups of up to four hex digits; `::` stands for a run of zero groups, and
+# the last groups may be an IPv4 address.
+let h16   = 1..4 hex
+let piece = ipv4 or h16
+let ipv6  = not after (wordchar or ":")
+            (h16 7 (":" h16)
+             or optional (piece 0..6 (":" piece)) "::" optional (piece 0..6 (":" piece))
+             or h16 5 (":" h16) ":" ipv4)
+            not followed by (wordchar or ":" hex)
+
+let mac   = not after hex 2 hex 5 (one of ":-" 2 hex) not followed by hex
+
+let label    = wordchar 0+ (optional "-" wordchar)
+let hostname = label 0+ ("." label)
+
+# Punctuation inside a URL is kept; at its end it belongs to the sentence.
+let url_char = none of (space "\"'<>(),.:;!?")
+let url      = letter 0+ one of (letter digit "+.-") "://"
+               1+ (one of ".,:;!?" followed by url_char or url_char)
+
+let email = 1+ one of (wordchar ".+-%") "@" hostname

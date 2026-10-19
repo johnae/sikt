@@ -1,0 +1,8 @@
+# Identifiers.
+
+let uuid   = 8 hex "-" 4 hex "-" 4 hex "-" 4 hex "-" 12 hex not followed by hex
+
+# Semantic versions: 1.24.0, 1.24.0-rc.1, 1.24.0+build.5.
+let semver = 1+ digit "." 1+ digit "." 1+ digit
+             optional ("-" 1+ one of (wordchar ".-"))
+             optional ("+" 1+ one of (wordchar ".-"))

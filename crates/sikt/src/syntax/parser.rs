@@ -5,9 +5,7 @@ use crate::error::Error;
 use crate::value::{CaptureType, unit_factor};
 
 /// Words held back for features planned after v1.
-const RESERVED: &[&str] = &[
-    "at", "grammar", "infix", "recover", "skip", "use", "longest",
-];
+const RESERVED: &[&str] = &["at", "grammar", "infix", "recover", "skip", "longest"];
 
 /// Words that can start a pattern; used for "did you mean" suggestions.
 pub(super) const VOCABULARY: &[&str] = &[
@@ -18,7 +16,7 @@ pub(super) const VOCABULARY: &[&str] = &[
 /// Words with a meaning of their own, which can't name a rule.
 const KEYWORDS: &[&str] = &[
     "or", "one", "none", "of", "followed", "by", "not", "after", "line", "text", "word", "start",
-    "end", "let", "find", "where", "replace", "print", "table", "types", "with", "match",
+    "end", "let", "find", "where", "replace", "print", "table", "types", "with", "use", "match",
 ];
 
 /// A `let` rule as written, before its references are resolved.
@@ -26,6 +24,22 @@ pub(crate) struct Rule {
     pub name: String,
     pub span: Span,
     pub body: Expr,
+    /// Brought in by `use`, so it's fine for the pattern not to use it.
+    pub imported: bool,
+}
+
+/// What a `use` brings in: a built-in module or a file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Import {
+    Module(String),
+    File(String),
+}
+
+/// A file brought in by `use`: rules, and what it uses itself.
+#[derive(Default)]
+pub(crate) struct Module {
+    pub rules: Vec<Rule>,
+    pub uses: Vec<(Import, Span)>,
 }
 
 /// A pattern as written: the expression to find, the `let` rules, and the
@@ -33,7 +47,29 @@ pub(crate) struct Rule {
 pub(crate) struct Parsed {
     pub main: Expr,
     pub rules: Vec<Rule>,
+    pub uses: Vec<(Import, Span)>,
     pub statements: Statements,
+}
+
+/// Parses a module: only `let` and `use`.
+pub(crate) fn parse_module(src: &str) -> Result<Module, Error> {
+    let mut p = Parser {
+        src,
+        tokens: lex(src)?,
+        pos: 0,
+    };
+    let mut module = Module::default();
+    loop {
+        if p.is_word("let") {
+            module.rules.push(p.rule()?);
+        } else if p.is_word("use") {
+            module.uses.push(p.import()?);
+        } else if p.peek() == &Tok::Eof {
+            return Ok(module);
+        } else {
+            return Err(p.error("a module can only have `let` and `use`", p.span(), None));
+        }
+    }
 }
 
 pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
@@ -53,12 +89,15 @@ pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
     };
     let mut rules = Vec::new();
     let mut statements = Statements::default();
+    let mut uses = Vec::new();
     let mut types = Vec::new();
     let mut types_at = None;
     let mut with = Vec::new();
     loop {
         if p.is_word("let") {
             rules.push(p.rule()?);
+        } else if p.is_word("use") {
+            uses.push(p.import()?);
         } else if p.is_word("table") {
             let keyword = p.bump().span;
             if statements.table.is_some() {
@@ -161,6 +200,7 @@ pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
         Some(main) => Ok(Parsed {
             main,
             rules,
+            uses,
             statements,
         }),
         None => {
@@ -216,7 +256,7 @@ impl Parser<'_> {
     /// capture.
     fn at_statement(&self) -> bool {
         [
-            "let", "find", "where", "replace", "print", "table", "types", "with",
+            "let", "find", "where", "replace", "print", "table", "types", "with", "use",
         ]
         .iter()
         .any(|w| self.is_word(w))
@@ -422,22 +462,20 @@ impl Parser<'_> {
     fn types(&mut self, span: Span) -> Result<Vec<(String, Span, CaptureType)>, Error> {
         let mut types = Vec::new();
         while let Tok::Word(name) = self.peek().clone() {
-            if self.at_statement() {
+            // A column named like a keyword, as `use` for `Use%`, still pairs
+            // with a type, unless the keyword's own statement could start with
+            // one: `where size > 1G`, `with size: ...`, `find size`.
+            let typed = column_type(self.peek_second()).is_some();
+            let column = typed && !["where", "with", "find"].contains(&name.as_str());
+            if self.at_statement() && !column {
                 break;
             }
             let name_span = self.bump().span;
-            let ty = match self.peek() {
-                Tok::Word(w) if w == "integer" => CaptureType::Integer,
-                Tok::Word(w) if w == "number" => CaptureType::Number,
-                Tok::Word(w) if w == "size" => CaptureType::Size,
-                Tok::Word(w) if w == "percent" => CaptureType::Percent,
-                Tok::Word(w) if w == "text" => CaptureType::Text,
-                _ => {
-                    let message = format!("expected a type after `{name}`");
-                    return Err(self
-                        .error(message, name_span, None)
-                        .with_help("types are integer, number, size, percent and text"));
-                }
+            let Some(ty) = column_type(self.peek()) else {
+                let message = format!("expected a type after `{name}`");
+                return Err(self
+                    .error(message, name_span, None)
+                    .with_help("types are integer, number, size, percent and text"));
             };
             self.bump();
             types.push((name, name_span, ty));
@@ -468,6 +506,22 @@ impl Parser<'_> {
         Ok((name, name_span, body))
     }
 
+    /// `use net` or `use "file.sikt"`.
+    fn import(&mut self) -> Result<(Import, Span), Error> {
+        let keyword = self.bump().span;
+        let import = match self.peek().clone() {
+            Tok::Word(name) => Import::Module(name),
+            Tok::Str(path) => Import::File(path),
+            _ => {
+                return Err(self
+                    .error("expected a module or a file after `use`", keyword, None)
+                    .with_help(r#"write it like `use net` or `use "rules.sikt"`"#));
+            }
+        };
+        let name = self.bump().span;
+        Ok((import, keyword.to(name)))
+    }
+
     /// `let name = expr`.
     fn rule(&mut self) -> Result<Rule, Error> {
         let let_span = self.bump().span;
@@ -493,7 +547,12 @@ impl Parser<'_> {
             return Err(self.error(message, let_span.to(equals), None));
         }
         let body = self.expr()?;
-        Ok(Rule { name, span, body })
+        Ok(Rule {
+            name,
+            span,
+            body,
+            imported: false,
+        })
     }
 
     fn expr(&mut self) -> Result<Expr, Error> {
@@ -834,17 +893,24 @@ fn typed(ty: CaptureType, span: Span) -> ExprKind {
         CaptureType::Text => unreachable!("text has no word"),
     };
     let mut body = parse(source).expect("built-in patterns parse").main;
-    respan(&mut body, span);
+    body.respan(span);
     ExprKind::Typed {
         ty,
         body: Box::new(body),
     }
 }
 
-fn respan(e: &mut Expr, span: Span) {
-    e.span = span;
-    for child in e.kind.children_mut() {
-        respan(child, span);
+fn column_type(tok: &Tok) -> Option<CaptureType> {
+    let Tok::Word(w) = tok else {
+        return None;
+    };
+    match w.as_str() {
+        "integer" => Some(CaptureType::Integer),
+        "number" => Some(CaptureType::Number),
+        "size" => Some(CaptureType::Size),
+        "percent" => Some(CaptureType::Percent),
+        "text" => Some(CaptureType::Text),
+        _ => None,
     }
 }
 

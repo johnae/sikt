@@ -124,9 +124,18 @@ fn run(args: &Args) -> io::Result<ExitCode> {
         (None, Some(program)) => program.clone(),
         (None, None) => unreachable!("clap requires a program"),
     };
+    // `use "path"` reads files next to the program file, or from the
+    // working directory for a program on the command line.
+    let base = args
+        .file
+        .as_deref()
+        .and_then(Path::parent)
+        .unwrap_or(Path::new(""))
+        .to_owned();
     let program = match sikt::Pattern::builder()
         .case_insensitive(args.ignore_case)
         .line_mode(!args.multiline)
+        .import_with(move |path| fs::read_to_string(base.join(path)).map_err(|e| e.to_string()))
         .build_program(&source)
     {
         Ok(program) => program,

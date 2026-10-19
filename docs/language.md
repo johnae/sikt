@@ -188,6 +188,32 @@ $ echo 'f(a, (b + c)) g(d' | sikt -o 'let group = "(" 0+ (none of "()" or group)
 A rule may not call itself before matching anything, as in `let sum = sum "+" digit`.
 Sikt reports that as an error.
 
+## Modules
+
+`use` brings in rules from a module, so common things don't need writing again. Module
+rules capture nothing, so name what you capture yourself:
+
+```sh
+$ echo '2026-10-19T15:13:02Z login from 10.0.0.7 as ada@example.org' |
+  sikt --rows 'use net use time
+               find when: datetime " login from " addr: ipv4 " as " user: email'
+{"when":"2026-10-19T15:13:02Z","addr":"10.0.0.7","user":"ada@example.org"}
+```
+
+The built-in modules:
+
+| Module | Rules |
+| --- | --- |
+| `net` | `ipv4`, `ipv6`, `hostname`, `url`, `email`, `mac` |
+| `time` | `date` (`2026-10-19`), `clock` (`15:13:02.250`), `zone` (`Z`, `+02:00`), `datetime` |
+| `text` | `quoted`, a string in `"` or `'` where `\` escapes the next character |
+| `id` | `uuid`, `semver` (`1.24.0-rc.1+build.5`) |
+
+`use "rules.sikt"` brings in the rules of a file of your own, which may hold only `let`
+and `use`. The `sikt` command reads it next to the program file given with `-f`, or from
+the working directory. In the library, `PatternBuilder::import_with` says how to read
+files.
+
 ## Programs
 
 A program wraps a pattern in statements. `find` gives the pattern, `where` keeps matches

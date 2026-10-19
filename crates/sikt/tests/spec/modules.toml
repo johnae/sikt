@@ -1,0 +1,95 @@
+# Built-in modules, brought in with `use`. Their rules have no captures, so a
+# pattern names what it captures.
+
+[[case]]
+name = "ipv4"
+pattern = 'use net find addr: ipv4'
+input = "from 10.0.0.1 to 256.1.1.1, 1.2.3.4567 or 192.168.1.20."
+matches = [{ text = "10.0.0.1", captures = { addr = "10.0.0.1" } }, "192.168.1.20"]
+
+[[case]]
+name = "ipv6"
+pattern = 'use net find ipv6'
+input = "::1 and 2001:db8::ff00:42:8329, fe80::1%eth0 or ::ffff:192.0.2.1 x"
+matches = ["::1", "2001:db8::ff00:42:8329", "fe80::1", "::ffff:192.0.2.1"]
+
+[[case]]
+name = "full ipv6"
+pattern = 'use net find ipv6'
+input = "2001:0db8:85a3:0000:0000:8a2e:0370:7334"
+matches = ["2001:0db8:85a3:0000:0000:8a2e:0370:7334"]
+
+[[case]]
+name = "urls"
+pattern = 'use net find url'
+input = "see https://example.org/a?b=1#c and ftp://files.example.net, or (http://x.y/z)"
+matches = ["https://example.org/a?b=1#c", "ftp://files.example.net", "http://x.y/z"]
+
+[[case]]
+name = "emails"
+pattern = 'use net find email'
+input = "write to ada.lovelace+notes@example.co.uk or bob@localhost."
+matches = ["ada.lovelace+notes@example.co.uk", "bob@localhost"]
+
+[[case]]
+name = "mac addresses"
+pattern = 'use net find mac'
+input = "eth0 3c:22:fb:0a:1b:9e lo 00-00-00-00-00-00"
+matches = ["3c:22:fb:0a:1b:9e", "00-00-00-00-00-00"]
+
+[[case]]
+name = "dates and times"
+pattern = 'use time find datetime'
+input = "at 2026-10-19T15:13:02Z, 2026-10-19 15:13:02.250+02:00 or 2026-10-19 15:13"
+matches = ["2026-10-19T15:13:02Z", "2026-10-19 15:13:02.250+02:00", "2026-10-19 15:13"]
+
+[[case]]
+name = "quoted strings"
+pattern = 'use text find quoted'
+input = '''say "hi \"there\"" and 'it\'s' or "unclosed'''
+matches = ['"hi \"there\""', "'it\\'s'"]
+
+[[case]]
+name = "uuids and versions"
+pattern = 'use id find uuid or semver'
+input = "id 3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b at v1.24.0-rc.1+build.5 and 2.0.0"
+matches = ["3f2b8c1e-9a4d-4e6f-8b7a-1c2d3e4f5a6b", "1.24.0-rc.1+build.5", "2.0.0"]
+
+[[case]]
+name = "several modules"
+pattern = 'use net use time find when: datetime " " who: ipv4'
+input = "2026-10-19 15:13:02 10.0.0.1 login"
+matches = [{ text = "2026-10-19 15:13:02 10.0.0.1", captures = { when = "2026-10-19 15:13:02", who = "10.0.0.1" } }]
+
+[[case]]
+name = "imported rules aren't unused"
+pattern = 'use net find ipv4'
+input = "1.2.3.4"
+matches = ["1.2.3.4"]
+warnings = []
+
+[[case]]
+name = "error: unknown module"
+pattern = 'use nett find ipv4'
+error = "unknown module `nett`"
+label = "did you mean `net`?"
+
+[[case]]
+name = "error: a rule defined twice through use"
+pattern = 'use net let ipv4 = digit find ipv4'
+error = "rule `ipv4` is defined twice"
+
+[[case]]
+name = "error: files need a loader"
+pattern = 'use "rules.sikt" find x'
+error = "importing files needs a loader"
+
+[[case]]
+name = "explanations name the imported rule"
+pattern = 'use net find "from " addr: ipv4'
+input = "from 10.0.x.1"
+explain = '''
+no match. closest attempt on line 1:
+  expected ipv4 but found "x"
+  from 10.0.x.1
+            ^'''

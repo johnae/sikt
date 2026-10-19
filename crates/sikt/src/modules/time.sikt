@@ -1,0 +1,6 @@
+# Dates and times as ISO 8601 writes them, with a space allowed for `T`.
+
+let date     = 4 digit "-" 2 digit "-" 2 digit
+let clock    = 2 digit ":" 2 digit optional (":" 2 digit optional (one of ".," 1+ digit))
+let zone     = "Z" or one of "+-" 2 digit optional ":" 2 digit
+let datetime = date one of "T " clock optional zone

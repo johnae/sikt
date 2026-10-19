@@ -99,6 +99,9 @@ $ df -h | sikt --rows 'table columns (fs size used avail use mount)
 {"fs":"tmpfs","size":17179869184,"used":8267812045,"avail":"8.4G","use":48.0,"mount":"/"}
 ```
 
+Ready-made rules for IP addresses, URLs, emails, dates, quoted strings and more come
+with `use`: `use net find addr: ipv4`.
+
 Longer programs can live in a file and run with `-f program.sikt`. Other options:
 `-o` prints only matches, `-c` counts, `-l` lists files, `-i` ignores case, `-U` matches
 across lines, `--json` prints full match records. See `sikt --help`.
@@ -136,7 +139,7 @@ implement [`miette::Diagnostic`](https://docs.rs/miette).
 ## Learn the language
 
 [The language guide](docs/language.md) covers everything: characters and sets,
-repetition, `until`, captures, rules, programs, templates and tables.
+repetition, `until`, captures, rules, modules, programs, templates and tables.
 
 ## Status
 

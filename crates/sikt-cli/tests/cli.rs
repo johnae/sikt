@@ -530,3 +530,43 @@ fn table_sizes_and_percentages() {
         .success()
         .stdout("{\"fs\":\"tmpfs\",\"size\":17179869184,\"use\":48.0,\"mount\":\"/\"}\n");
 }
+
+#[test]
+fn use_reads_files_next_to_the_program() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("lib")).unwrap();
+    fs::write(
+        dir.path().join("lib/log.sikt"),
+        "let level = \"[\" 1+ upper \"]\"\n",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("lib/find.sikt"),
+        "use \"log.sikt\"\nfind level\n",
+    )
+    .unwrap();
+    sikt()
+        .args(["-o", "-f", "lib/find.sikt"])
+        .current_dir(dir.path())
+        .write_stdin("a [WARN] b\n")
+        .assert()
+        .success()
+        .stdout("[WARN]\n");
+}
+
+#[test]
+fn use_reads_files_from_the_working_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("log.sikt"),
+        "let level = \"[\" 1+ upper \"]\"\n",
+    )
+    .unwrap();
+    sikt()
+        .args(["-o", r#"use "log.sikt" find level"#])
+        .current_dir(dir.path())
+        .write_stdin("a [WARN] b\n")
+        .assert()
+        .success()
+        .stdout("[WARN]\n");
+}

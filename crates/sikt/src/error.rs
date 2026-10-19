@@ -33,6 +33,22 @@ impl Error {
         }))
     }
 
+    /// The same error, moved into the file `name` whose text `src` starts at
+    /// byte `offset` of the source the error points into.
+    pub(crate) fn moved_to(mut self, name: &str, src: &str, offset: usize) -> Self {
+        let span = self.span();
+        let label = self.0.label.label().map(str::to_owned);
+        let span = Span::new(span.start - offset, span.end - offset);
+        self.0.label = LabeledSpan::new_primary_with_span(label, span);
+        self.in_file(name, src)
+    }
+
+    /// The same error, shown in the file `name` with text `src` instead.
+    pub(crate) fn in_file(mut self, name: &str, src: &str) -> Self {
+        self.0.source_code = NamedSource::new(name, src.to_owned());
+        self
+    }
+
     pub(crate) fn with_help(mut self, help: impl Into<String>) -> Self {
         self.0.help = Some(help.into());
         self

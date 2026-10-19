@@ -1,0 +1,4 @@
+# Quoted strings, where a backslash escapes the next character.
+
+let quoted = "\"" 0+ ("\\" any or none of "\"\\") "\""
+          or "'" 0+ ("\\" any or none of "'\\") "'"

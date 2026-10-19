@@ -13,21 +13,27 @@ use crate::error::Error;
 const MAX_NODES: usize = 1 << 20;
 
 pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
+    // `use` has already brought its rules in; see `syntax::parse`.
     let Parsed {
         main,
         rules,
         mut statements,
+        ..
     } = parsed;
     let mut index = HashMap::new();
     for (i, rule) in rules.iter().enumerate() {
-        if index.insert(rule.name.as_str(), i).is_some() {
-            return Err(Error::new(
-                src,
-                format!("rule `{}` is defined twice", rule.name),
-                rule.span,
-                None,
-            )
-            .with_help("rename one of them"));
+        if let Some(first) = index.insert(rule.name.as_str(), i) {
+            // Point at the pattern's own rule when a module defines the name too.
+            let (span, label) = if rule.imported && !rules[first].imported {
+                (
+                    rules[first].span,
+                    Some("a module this pattern uses defines it too".to_owned()),
+                )
+            } else {
+                (rule.span, None)
+            };
+            let message = format!("rule `{}` is defined twice", rule.name);
+            return Err(Error::new(src, message, span, label).with_help("rename one of them"));
         }
     }
     let mut refs = vec![Vec::new(); rules.len()];
@@ -43,7 +49,9 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
     let unused_rules = rules
         .iter()
         .enumerate()
-        .filter(|&(i, _)| !main_refs.iter().any(|&m| m == i || reaches(&refs, m, i)))
+        .filter(|&(i, rule)| {
+            !rule.imported && !main_refs.iter().any(|&m| m == i || reaches(&refs, m, i))
+        })
         .map(|(_, rule)| (rule.name.clone(), rule.span))
         .collect();
 
@@ -184,7 +192,7 @@ impl Resolver<'_> {
             };
             return Ok(Expr::new(kind, e.span));
         }
-        let body = match self.inlined.get(&i) {
+        let mut body = match self.inlined.get(&i) {
             Some(body) => body.clone(),
             None => {
                 let body = self.expand(&self.rules[i].body)?;
@@ -192,6 +200,11 @@ impl Resolver<'_> {
                 body
             }
         };
+        // An imported rule reads as one word, like `ipv4`: its parts take the
+        // span of the reference to it.
+        if self.rules[i].imported {
+            body.respan(e.span);
+        }
         self.nodes += count(&body);
         Ok(body)
     }

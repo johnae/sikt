@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::fmt;
 use std::ops::Range;
+use std::sync::Arc;
 
 use crate::class::char_len;
 use crate::compile::{Code, compile};
@@ -10,7 +11,7 @@ use crate::haystack::Haystack;
 use crate::lint::lint;
 use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::program::Program;
-use crate::syntax::{Ast, parse};
+use crate::syntax::{Ast, Loader, parse};
 use crate::template::Template;
 use crate::value::{CaptureType, Value};
 use crate::vm::{self, Captures, Limits, Scratch, Trace};
@@ -44,6 +45,7 @@ pub struct PatternBuilder {
     limits: Limits,
     pub(crate) case_insensitive: bool,
     line_mode: bool,
+    loader: Option<Loader>,
 }
 
 impl PatternBuilder {
@@ -78,6 +80,17 @@ impl PatternBuilder {
         self
     }
 
+    /// How to read the files that `use "path"` names: `load` gets the path as
+    /// written and returns the file's text, or why it couldn't. Built-in
+    /// modules like `use net` don't need it.
+    pub fn import_with(
+        mut self,
+        load: impl Fn(&str) -> Result<String, String> + Send + Sync + 'static,
+    ) -> Self {
+        self.loader = Some(Loader(Arc::new(load)));
+        self
+    }
+
     pub fn build(&self, source: &str) -> Result<Pattern, Error> {
         let (pattern, ast) = self.compile(source)?;
         let statements = &ast.statements;
@@ -105,13 +118,14 @@ impl PatternBuilder {
     pub fn build_program(&self, source: &str) -> Result<Program, Error> {
         let (pattern, mut ast) = self.compile(source)?;
         let statements = std::mem::take(&mut ast.statements);
-        Program::from_parts(pattern, statements, &ast, source, self)
+        let text = pattern.source().to_owned();
+        Program::from_parts(pattern, statements, &ast, &text, self)
     }
 
     fn compile(&self, source: &str) -> Result<(Pattern, Ast), Error> {
-        let ast = parse(source)?;
-        let warnings = lint(&ast, source, self.line_mode);
-        self.compile_ast(ast, source, warnings)
+        let (ast, text) = parse(source, self.loader.as_ref())?;
+        let warnings = lint(&ast, &text, self.line_mode);
+        self.compile_ast(ast, &text, warnings)
     }
 
     /// Compiles a resolved pattern whose spans point into `source`.
@@ -148,9 +162,11 @@ impl Pattern {
             limits: DEFAULT_LIMITS,
             case_insensitive: false,
             line_mode: false,
+            loader: None,
         }
     }
 
+    /// The pattern as written, followed by the text of the modules it uses.
     pub fn source(&self) -> &str {
         &self.source
     }

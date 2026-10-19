@@ -97,8 +97,8 @@ error = "repetition would loop forever"
 
 [[case]]
 name = "reserved word"
-pattern = 'use "x"'
-error = "`use` is reserved for a future version of sikt"
+pattern = 'skip "x"'
+error = "`skip` is reserved for a future version of sikt"
 
 [[case]]
 name = "match is not a capture name"
