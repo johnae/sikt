@@ -1,8 +1,8 @@
-use super::ast::{Anchor, Cond, Expr, ExprKind, Output, Span, Statements, TableSpec, Test};
+use super::ast::{Anchor, Cond, Expr, ExprKind, Output, Span, Statements, TableSpec, Test, Unit};
 use super::lexer::{Tok, Token, lex};
 use crate::class::{CharSet, Kind};
 use crate::error::Error;
-use crate::value::{CaptureType, unit_factor};
+use crate::value::CaptureType;
 
 /// Words held back for features planned after v1.
 const RESERVED: &[&str] = &["at", "grammar", "infix", "recover", "skip", "longest"];
@@ -10,7 +10,7 @@ const RESERVED: &[&str] = &["at", "grammar", "infix", "recover", "skip", "longes
 /// Words that can start a pattern; used for "did you mean" suggestions.
 pub(super) const VOCABULARY: &[&str] = &[
     "any", "newline", "optional", "until", "through", "nocase", "integer", "number", "size",
-    "percent",
+    "percent", "duration",
 ];
 
 /// Words with a meaning of their own, which can't name a rule.
@@ -340,15 +340,21 @@ impl Parser<'_> {
                 }
             };
             let number = self.bump().span;
-            // A unit right after the number makes it a size: `1.5G`, `20MiB`.
-            let factor = match self.peek() {
-                Tok::Word(unit) if self.span().start == number.end => unit_factor(unit),
+            // A word right after the number is a unit: `1.5G`, `1m30s`. The
+            // capture's type says what it means, so it's checked later.
+            let unit = match self.peek().clone() {
+                Tok::Word(letters) if self.span().start == number.end => {
+                    let span = number.to(self.bump().span);
+                    let literal = self.src[span.start..span.end].to_owned();
+                    Some(Unit {
+                        letters,
+                        literal,
+                        span,
+                    })
+                }
                 _ => None,
             };
-            if factor.is_some() {
-                self.bump();
-            }
-            Test::Compare(op, value * factor.unwrap_or(1.0))
+            Test::Compare(op, value, unit)
         } else if self.is_word("contains") {
             self.bump();
             Test::Contains(self.string("after `contains`")?)
@@ -475,7 +481,7 @@ impl Parser<'_> {
                 let message = format!("expected a type after `{name}`");
                 return Err(self
                     .error(message, name_span, None)
-                    .with_help("types are integer, number, size, percent and text"));
+                    .with_help("types are integer, number, size, percent, duration and text"));
             };
             self.bump();
             types.push((name, name_span, ty));
@@ -737,6 +743,7 @@ impl Parser<'_> {
                 "number" => typed(CaptureType::Number, token.span),
                 "size" => typed(CaptureType::Size, token.span),
                 "percent" => typed(CaptureType::Percent, token.span),
+                "duration" => typed(CaptureType::Duration, token.span),
                 w => match Kind::from_name(w) {
                     Some(kind) => ExprKind::Class(CharSet::kind(kind)),
                     None if RESERVED.contains(&w) => {
@@ -887,9 +894,16 @@ fn typed(ty: CaptureType, span: Span) -> ExprKind {
         CaptureType::Number => {
             r#"optional one of "+-" (1+ digit optional ("." 1+ digit) or "." 1+ digit)"#
         }
-        // Units as in [`unit_factor`]: `K`, `Ki`, `KiB`, `KB`, `kB`, ..., `B`.
+        // Units as in [`unit_factor`](crate::value::unit_factor): `K`, `Ki`, `KiB`, `KB`, `kB`, ..., `B`.
         CaptureType::Size => r#"number optional (one of "KMGTPEkmgtpe" optional "i") optional "B""#,
         CaptureType::Percent => r#"number "%""#,
+        // A clock like `26:58` or `1-02:03:04`, or units like `1h30m`; units as
+        // in [`seconds_per`](crate::value::seconds_per).
+        CaptureType::Duration => {
+            r#"optional (1+ digit "-") 1+ digit ":" 2 digit optional (":" 2 digit) optional ("." 1+ digit)
+               or 1+ (number ("ns" or "us" or "µs" or "ms" or "s" or "m" or "h" or "d" or "w")
+                      not followed by letter)"#
+        }
         CaptureType::Text => unreachable!("text has no word"),
     };
     let mut body = parse(source).expect("built-in patterns parse").main;
@@ -909,6 +923,7 @@ fn column_type(tok: &Tok) -> Option<CaptureType> {
         "number" => Some(CaptureType::Number),
         "size" => Some(CaptureType::Size),
         "percent" => Some(CaptureType::Percent),
+        "duration" => Some(CaptureType::Duration),
         "text" => Some(CaptureType::Text),
         _ => None,
     }

@@ -90,8 +90,8 @@ $ sikt --rows 'date: until " " " " time: until " " " [" level: 1+ upper "] "
 {"date":"2026-10-19","time":"15:13:07","level":"WARN","source":"db","message":"slow query took 1840ms"}
 ```
 
-Tables with a header row get their columns from it. `integer`, `number`, `size` and
-`percent` give captures real values:
+Tables with a header row get their columns from it. `integer`, `number`, `size`,
+`percent` and `duration` give captures real values:
 
 ```sh
 $ df -h | sikt --rows 'table columns (fs size used avail use mount)

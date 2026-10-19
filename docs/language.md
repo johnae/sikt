@@ -113,7 +113,7 @@ every occurrence and its value is the last one.
 
 ## Typed captures
 
-Four words match numbers and give a capture of them a value instead of text:
+Five words match numbers and give a capture of them a value instead of text:
 
 | Word | Matches | Value |
 | --- | --- | --- |
@@ -121,13 +121,20 @@ Four words match numbers and give a capture of them a value instead of text:
 | `number` | `1.5`, `.5`, `-0.25`, `7` | the number |
 | `size` | `16G`, `4.0K`, `1.5GiB`, `512` | bytes |
 | `percent` | `48%`, `1.5%` | the number before `%` |
+| `duration` | `1h30m`, `250ms`, `26:58`, `1-02:03:04` | seconds |
 
 For sizes, `K` `M` `G` `T` `P` `E` and `Ki` or `KiB` count in 1024s, the way `ls -h` and
 `df -h` print them. `KB`, `MB` and `kB` count in 1000s. No unit means bytes.
 
+Durations use `ns`, `us`, `ms`, `s`, `m`, `h`, `d` and `w`, or a clock: two parts are
+minutes and seconds like `ps` prints them, three are hours, minutes and seconds, and a
+`3-` in front counts days.
+
 ```sh
 $ echo 'disk 1.5G used 48% of 3G' | sikt --rows 'used: size " used " pct: percent'
 {"used":1610612736,"pct":48.0}
+$ echo 'job a took 1m30s, job b took 2:05' | sikt -o 'find "took " t: duration where t > 100s'
+took 2:05
 ```
 
 ## Anchors
@@ -233,7 +240,7 @@ Conditions in `where`:
 | --- | --- |
 | `level is "WARN"`, `level is not "WARN"` | the capture is, or isn't, that text |
 | `level in ("WARN" "ERROR")`, `not in (...)` | it's one of the strings, or none of them |
-| `ms > 1000`, `>=`, `<`, `<=` | it's a number that compares so; `size > 1.5G` works too |
+| `ms > 1000`, `>=`, `<`, `<=` | it's a number that compares so; units work for `size` and `duration` captures, as in `size > 1.5G` or `t > 1h30m` |
 | `msg contains "timeout"` | the text contains the string |
 | `path matches (until ".rs" ".rs")` | the pattern matches the whole capture |
 

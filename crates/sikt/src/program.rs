@@ -5,11 +5,11 @@ use crate::error::{Error, MatchError, Warning};
 use crate::haystack::Haystack;
 use crate::pattern::{Match, Pattern, PatternBuilder, splice};
 use crate::syntax::{
-    Anchor, Ast, CmpOp, Cond, Expr, ExprKind, Span, Statements, Test, suggest_from,
+    Anchor, Ast, CmpOp, Cond, Expr, ExprKind, Span, Statements, Test, Unit, suggest_from,
 };
 use crate::table::Table;
 use crate::template::Template;
-use crate::value::Value;
+use crate::value::{CaptureType, Value, duration, size};
 use crate::vm::{self, Scratch};
 
 /// What a program does with each match.
@@ -95,7 +95,14 @@ impl Program {
         }
         let names: Vec<&str> = pattern.capture_names().collect();
         let filter = match statements.filter {
-            Some((_, cond)) => Some(check(cond, ast, &names, source, case_insensitive)?),
+            Some((_, cond)) => Some(check(
+                cond,
+                ast,
+                &pattern,
+                &names,
+                source,
+                case_insensitive,
+            )?),
             None => None,
         };
         let (action, output) = match statements.output {
@@ -249,11 +256,12 @@ impl Program {
 fn check(
     cond: Cond,
     ast: &Ast,
+    pattern: &Pattern,
     names: &[&str],
     source: &str,
     case_insensitive: bool,
 ) -> Result<Filter, Error> {
-    let check = |c: Cond| check(c, ast, names, source, case_insensitive);
+    let check = |c: Cond| check(c, ast, pattern, names, source, case_insensitive);
     let fold = |s: String| {
         if case_insensitive {
             s.to_lowercase()
@@ -278,7 +286,11 @@ fn check(
             let test = match test {
                 Test::Is(s) => CheckedTest::Is(fold(s)),
                 Test::In(list) => CheckedTest::In(list.into_iter().map(fold).collect()),
-                Test::Compare(op, n) => CheckedTest::Compare(op, n),
+                Test::Compare(op, n, unit) => {
+                    let name = capture.as_deref();
+                    let ty = name.and_then(|name| pattern.capture_type(name));
+                    CheckedTest::Compare(op, with_unit(n, unit, name, ty, source)?)
+                }
                 Test::Contains(s) => CheckedTest::Contains(fold(s)),
                 Test::Matches(expr) => {
                     CheckedTest::Matches(Box::new(whole_text(expr, ast, source, case_insensitive)?))
@@ -286,6 +298,41 @@ fn check(
             };
             Filter::Test { capture, test }
         }
+    })
+}
+
+/// `n` with the unit written after it, read for a capture of type `ty`: bytes
+/// for a size, seconds for a duration.
+fn with_unit(
+    n: f64,
+    unit: Option<Unit>,
+    capture: Option<&str>,
+    ty: Option<CaptureType>,
+    source: &str,
+) -> Result<f64, Error> {
+    let Some(unit) = unit else {
+        return Ok(n);
+    };
+    let (value, kind) = match ty {
+        Some(CaptureType::Size) => (size(&unit.literal).map(|bytes| bytes as f64), "size"),
+        Some(CaptureType::Duration) => (duration(&unit.literal), "duration"),
+        _ => {
+            let name = capture.unwrap_or("match");
+            let message = format!(
+                "`{}` is a unit, but `{name}` isn't a size or a duration",
+                unit.letters
+            );
+            return Err(Error::new(source, message, unit.span, None)
+                .with_help("capture it with `size` or `duration`"));
+        }
+    };
+    value.ok_or_else(|| {
+        Error::new(
+            source,
+            format!("`{}` isn't a unit of {kind}", unit.letters),
+            unit.span,
+            None,
+        )
     })
 }
 

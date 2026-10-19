@@ -93,3 +93,44 @@ program = true
 pattern = 'find p: percent where p >= 50'
 input = "48% 50% 99.5%"
 matches = ["50%", "99.5%"]
+
+[[case]]
+name = "durations are seconds"
+pattern = 'd: duration'
+input = "1h30m 90s 250ms 2d 1.5h 26:58 00:05:12 1-02:03:04 5min"
+matches = [
+  { text = "1h30m", values = { d = 5400.0 } },
+  { text = "90s", values = { d = 90.0 } },
+  { text = "250ms", values = { d = 0.25 } },
+  { text = "2d", values = { d = 172800.0 } },
+  { text = "1.5h", values = { d = 5400.0 } },
+  { text = "26:58", values = { d = 1618.0 } },
+  { text = "00:05:12", values = { d = 312.0 } },
+  { text = "1-02:03:04", values = { d = 93784.0 } },
+]
+
+[[case]]
+name = "where compares durations with units"
+program = true
+pattern = 'find name: 1+ letter " " t: duration where t >= 1m30s'
+input = "a 90s b 2m c 45s d 1:29 e 1:31"
+matches = ["a 90s", "b 2m", "e 1:31"]
+
+[[case]]
+name = "units follow the capture's type"
+program = true
+pattern = 'find s: size " " t: duration where s > 1m and t > 1m'
+input = "2M 2m 1M 2m 2M 30s"
+matches = ["2M 2m"]
+
+[[case]]
+name = "error: a unit on an untyped capture"
+program = true
+pattern = 'find n: 1+ digit where n > 5m'
+error = "`m` is a unit, but `n` isn't a size or a duration"
+
+[[case]]
+name = "error: a unit of the wrong kind"
+program = true
+pattern = 'find s: size where s > 5h'
+error = "`h` isn't a unit of size"

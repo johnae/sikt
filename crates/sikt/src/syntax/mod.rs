@@ -8,7 +8,9 @@ mod resolve;
 use std::fmt;
 use std::sync::Arc;
 
-pub(crate) use ast::{Anchor, Ast, CmpOp, Cond, Expr, ExprKind, Span, Statements, TableSpec, Test};
+pub(crate) use ast::{
+    Anchor, Ast, CmpOp, Cond, Expr, ExprKind, Span, Statements, TableSpec, Test, Unit,
+};
 pub(crate) use resolve::suggest_from;
 
 use crate::error::Error;

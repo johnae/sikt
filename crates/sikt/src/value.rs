@@ -13,6 +13,8 @@ pub enum CaptureType {
     Size,
     /// A percentage like `48%`, as the number before the `%`.
     Percent,
+    /// A duration like `1h30m` or `26:58`, as a number of seconds.
+    Duration,
 }
 
 /// A capture's value. An `integer` too large for `i64` comes back as a
@@ -40,6 +42,7 @@ impl CaptureType {
             CaptureType::Number => "number",
             CaptureType::Size => "size",
             CaptureType::Percent => "percent",
+            CaptureType::Duration => "duration",
         }
     }
 
@@ -59,6 +62,7 @@ impl CaptureType {
             CaptureType::Integer => integer().or_else(number),
             CaptureType::Number => number(),
             CaptureType::Size => parsed.and_then(size).map(Value::Integer),
+            CaptureType::Duration => parsed.and_then(duration).map(Value::Number),
             CaptureType::Percent => parsed
                 .and_then(|t| t.strip_suffix('%')?.parse().ok())
                 .map(Value::Number),
@@ -68,7 +72,7 @@ impl CaptureType {
 }
 
 /// Bytes in a size like `1.5G`, `512` or `20MiB`, rounded.
-fn size(text: &str) -> Option<i64> {
+pub(crate) fn size(text: &str) -> Option<i64> {
     let split = text
         .find(|c: char| c.is_ascii_alphabetic())
         .unwrap_or(text.len());
@@ -102,9 +106,68 @@ pub(crate) fn unit_factor(unit: &str) -> Option<f64> {
     Some(base.powi(power))
 }
 
+/// Seconds in a duration: units like `1h30m`, `250ms` and `2d`, or a clock like
+/// `26:58` (minutes and seconds), `00:05:12` or `1-02:03:04` (with days).
+pub(crate) fn duration(text: &str) -> Option<f64> {
+    if text.contains(':') {
+        let (days, clock) = match text.split_once('-') {
+            Some((days, clock)) => (days.parse::<f64>().ok()?, clock),
+            None => (0.0, text),
+        };
+        let parts: Vec<f64> = clock
+            .split(':')
+            .map(|p| p.parse().ok())
+            .collect::<Option<_>>()?;
+        let seconds = match parts[..] {
+            [m, s] => m * 60.0 + s,
+            [h, m, s] => h * 3600.0 + m * 60.0 + s,
+            _ => return None,
+        };
+        return Some(days * 86400.0 + seconds);
+    }
+    let mut rest = text;
+    let mut seconds = 0.0;
+    while !rest.is_empty() {
+        let number_end = rest.find(|c: char| !(c.is_ascii_digit() || c == '.'))?;
+        let unit_end = rest[number_end..]
+            .find(|c: char| c.is_ascii_digit() || c == '.')
+            .map_or(rest.len(), |i| number_end + i);
+        let number: f64 = rest[..number_end].parse().ok()?;
+        seconds += number * seconds_per(&rest[number_end..unit_end])?;
+        rest = &rest[unit_end..];
+    }
+    Some(seconds)
+}
+
+/// Seconds per duration unit.
+pub(crate) fn seconds_per(unit: &str) -> Option<f64> {
+    Some(match unit {
+        "ns" => 1e-9,
+        "us" | "µs" => 1e-6,
+        "ms" => 1e-3,
+        "s" => 1.0,
+        "m" => 60.0,
+        "h" => 3600.0,
+        "d" => 86400.0,
+        "w" => 604800.0,
+        _ => return None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durations() {
+        assert_eq!(duration("1h30m"), Some(5400.0));
+        assert_eq!(duration("250ms"), Some(0.25));
+        assert_eq!(duration("1.5h"), Some(5400.0));
+        assert_eq!(duration("26:58"), Some(1618.0));
+        assert_eq!(duration("1-02:03:04"), Some(93784.0));
+        assert_eq!(duration("5min"), None);
+        assert_eq!(duration("1:2:3:4"), None);
+    }
 
     #[test]
     fn sizes() {

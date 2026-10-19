@@ -353,7 +353,8 @@ pub(crate) enum Cond {
 pub(crate) enum Test {
     Is(String),
     In(Vec<String>),
-    Compare(CmpOp, f64),
+    /// A number, with the unit written after it if any.
+    Compare(CmpOp, f64, Option<Unit>),
     Contains(String),
     /// The sub-pattern matches all of the text.
     Matches(Expr),
@@ -382,6 +383,16 @@ impl Cond {
             test @ Cond::Test { .. } => test,
         })
     }
+}
+
+/// A unit written right after a number in a comparison, like `G` in `1.5G` or
+/// `m30s` in `1m30s`. What it means depends on the type of the capture.
+#[derive(Debug, Clone)]
+pub(crate) struct Unit {
+    pub letters: String,
+    /// The number and the unit as written.
+    pub literal: String,
+    pub span: Span,
 }
 
 /// `replace "..."` or `print "..."`.
