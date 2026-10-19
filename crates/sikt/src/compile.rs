@@ -2,7 +2,7 @@
 
 use memchr::memmem::Finder;
 
-use crate::class::Kind;
+use crate::class::CharSet;
 use crate::error::Error;
 use crate::syntax::{Expr, ExprKind};
 
@@ -19,9 +19,10 @@ pub(crate) enum Inst {
     Byte(u8),
     /// The literal at this index in [`Program::literals`].
     Literal(u32),
-    Class(Kind),
-    /// Zero or more of a class, without pushing backtrack entries.
-    SpanClass(Kind),
+    /// One character from the set at this index in [`Program::sets`].
+    Set(u32),
+    /// Zero or more characters from a set, without pushing backtrack entries.
+    SpanSet(u32),
     /// Advances to the next occurrence of [`Program::finders`] at this index,
     /// failing if there is none.
     UntilLiteral(u32),
@@ -48,6 +49,7 @@ pub(crate) struct Program {
     pub insts: Vec<Inst>,
     pub literals: Vec<Box<[u8]>>,
     pub finders: Vec<Finder<'static>>,
+    pub sets: Vec<CharSet>,
     /// Capture names, indexed by slot.
     pub captures: Vec<String>,
 }
@@ -59,6 +61,7 @@ pub(crate) fn compile(expr: &Expr, src: &str) -> Result<Program, Error> {
             insts: Vec::new(),
             literals: Vec::new(),
             finders: Vec::new(),
+            sets: Vec::new(),
             captures: Vec::new(),
         },
     };
@@ -106,6 +109,15 @@ impl Compiler<'_> {
         }
     }
 
+    fn set(&mut self, set: &CharSet) -> u32 {
+        let sets = &mut self.program.sets;
+        let i = sets.iter().position(|s| s == set).unwrap_or_else(|| {
+            sets.push(set.clone());
+            sets.len() - 1
+        });
+        i as u32
+    }
+
     fn slot(&mut self, name: &str) -> u32 {
         let captures = &mut self.program.captures;
         let slot = captures.iter().position(|n| n == name).unwrap_or_else(|| {
@@ -129,8 +141,9 @@ impl Compiler<'_> {
                 self.literal("\n");
                 self.patch(commit);
             }
-            ExprKind::Kind(k) => {
-                self.push(Inst::Class(*k));
+            ExprKind::Class(set) => {
+                let i = self.set(set);
+                self.push(Inst::Set(i));
             }
             ExprKind::Seq(items) => {
                 for item in items {
@@ -210,9 +223,10 @@ impl Compiler<'_> {
 
     /// Zero or more, possessive.
     fn star(&mut self, body: &Expr) -> Result<(), Error> {
-        match body.kind {
-            ExprKind::Kind(k) => {
-                self.push(Inst::SpanClass(k));
+        match &body.kind {
+            ExprKind::Class(set) => {
+                let i = self.set(set);
+                self.push(Inst::SpanSet(i));
             }
             ExprKind::Any => {
                 self.push(Inst::SpanAny);

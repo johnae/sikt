@@ -1,4 +1,4 @@
-use crate::class::Kind;
+use crate::class::CharSet;
 
 /// A byte range in the pattern source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +41,8 @@ pub(crate) enum ExprKind {
     Literal(String),
     Any,
     Newline,
-    Kind(Kind),
+    /// One character from a set; character kinds like `digit` are sets too.
+    Class(CharSet),
     Seq(Vec<Expr>),
     /// Ordered choice: the first alternative that matches wins.
     Choice(Vec<Expr>),
@@ -64,7 +65,7 @@ impl ExprKind {
     pub fn nullable(&self) -> bool {
         match self {
             ExprKind::Literal(s) => s.is_empty(),
-            ExprKind::Any | ExprKind::Newline | ExprKind::Kind(_) => false,
+            ExprKind::Any | ExprKind::Newline | ExprKind::Class(_) => false,
             ExprKind::Seq(items) => items.iter().all(|e| e.kind.nullable()),
             ExprKind::Choice(alts) => alts.iter().any(|e| e.kind.nullable()),
             ExprKind::Repeat { min, body, .. } => *min == 0 || body.kind.nullable(),

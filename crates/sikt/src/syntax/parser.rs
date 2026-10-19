@@ -1,6 +1,6 @@
 use super::ast::{Expr, ExprKind, Span};
 use super::lexer::{Tok, Token, lex};
-use crate::class::Kind;
+use crate::class::{CharSet, Kind};
 use crate::error::Error;
 
 /// Words held back for features planned after v1.
@@ -10,7 +10,7 @@ const RESERVED: &[&str] = &[
 
 /// Words in the v1 language that the parser doesn't handle yet.
 const UNSUPPORTED: &[&str] = &[
-    "one", "none", "followed", "not", "after", "nocase", "let", "line", "text", "word",
+    "followed", "not", "after", "nocase", "let", "line", "text", "word",
 ];
 
 /// Words that can start a pattern; used for "did you mean" suggestions.
@@ -220,8 +220,9 @@ impl Parser<'_> {
             Tok::Word(w) => match w.as_str() {
                 "any" => ExprKind::Any,
                 "newline" => ExprKind::Newline,
+                "one" | "none" => self.set(token.span, w == "none")?,
                 w => match Kind::from_name(w) {
-                    Some(kind) => ExprKind::Kind(kind),
+                    Some(kind) => ExprKind::Class(CharSet::kind(kind)),
                     None => return Err(self.word_error(w, token.span)),
                 },
             },
@@ -243,6 +244,88 @@ impl Parser<'_> {
             }
         };
         Ok(Expr::new(kind, token.span))
+    }
+
+    /// `one of ...` or `none of ...`, after the `one` or `none`.
+    fn set(&mut self, start: Span, negated: bool) -> Result<ExprKind, Error> {
+        let word = if negated { "none" } else { "one" };
+        if !matches!(self.peek(), Tok::Word(w) if w == "of") {
+            return Err(self.error(format!("expected `of` after `{word}`"), start, None));
+        }
+        self.bump();
+        let mut ranges = Vec::new();
+        let mut kinds = Vec::new();
+        if self.peek() == &Tok::LParen {
+            let open = self.bump();
+            while !matches!(self.peek(), Tok::RParen | Tok::Eof) {
+                self.set_item(&mut ranges, &mut kinds)?;
+            }
+            if self.peek() == &Tok::Eof {
+                let label = Some("this parenthesis is never closed".into());
+                return Err(self.error("unclosed `(`", open.span, label));
+            }
+            let close = self.bump();
+            if ranges.is_empty() && kinds.is_empty() {
+                let label = Some("nothing in the set".into());
+                return Err(self.error("empty set", open.span.to(close.span), label));
+            }
+        } else {
+            self.set_item(&mut ranges, &mut kinds)?;
+        }
+        Ok(ExprKind::Class(CharSet::new(ranges, kinds, negated)))
+    }
+
+    /// A string, a range like `"a".."f"`, or a character kind.
+    fn set_item(
+        &mut self,
+        ranges: &mut Vec<(char, char)>,
+        kinds: &mut Vec<Kind>,
+    ) -> Result<(), Error> {
+        let token = self.bump();
+        match token.tok {
+            Tok::Str(lo) if self.peek() == &Tok::DotDot => {
+                self.bump();
+                let hi_token = self.bump();
+                let span = token.span.to(hi_token.span);
+                let single = |s: &str| {
+                    let mut chars = s.chars();
+                    chars.next().filter(|_| chars.next().is_none())
+                };
+                let hi = match &hi_token.tok {
+                    Tok::Str(hi) => hi.as_str(),
+                    _ => "",
+                };
+                let (Some(lo_char), Some(hi_char)) = (single(&lo), single(hi)) else {
+                    return Err(self
+                        .error("a range needs single characters", span, None)
+                        .with_help(r#"write it like "a".."f""#));
+                };
+                if hi_char < lo_char {
+                    let label = Some("the smaller character goes first".into());
+                    return Err(self.error(
+                        format!("range {lo:?}..{hi:?} is backwards"),
+                        span,
+                        label,
+                    ));
+                }
+                ranges.push((lo_char, hi_char));
+            }
+            Tok::Str(s) if s.is_empty() => {
+                return Err(self.error("empty string in a set", token.span, None));
+            }
+            Tok::Str(s) => ranges.extend(s.chars().map(|c| (c, c))),
+            Tok::Word(w) if Kind::from_name(&w).is_some() => kinds.extend(Kind::from_name(&w)),
+            tok => {
+                return Err(self
+                    .error(
+                        format!("{} can't be in a set", tok.describe()),
+                        token.span,
+                        None,
+                    )
+                    .with_help(r#"sets hold strings, ranges like "a".."f", and character kinds"#));
+            }
+        }
+        Ok(())
     }
 
     fn word_error(&self, word: &str, span: Span) -> Error {
@@ -305,7 +388,7 @@ mod tests {
             ExprKind::Literal(s) => format!("{s:?}"),
             ExprKind::Any => "any".into(),
             ExprKind::Newline => "newline".into(),
-            ExprKind::Kind(k) => k.name().into(),
+            ExprKind::Class(set) => set.as_kind().map_or("set", |k| k.name()).into(),
             ExprKind::Seq(items) => format!(
                 "seq({})",
                 items.iter().map(show).collect::<Vec<_>>().join(" ")

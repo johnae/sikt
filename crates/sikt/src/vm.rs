@@ -93,10 +93,11 @@ pub(crate) fn exec(
                     false
                 }
             }
-            Inst::Class(kind) => {
+            Inst::Set(i) => {
+                let set = &program.sets[i as usize];
                 if pos < hay.len()
                     && let (Some(c), len) = decode(&hay[pos..])
-                    && kind.matches(c)
+                    && set.matches(c)
                 {
                     pos += len;
                     true
@@ -104,10 +105,11 @@ pub(crate) fn exec(
                     false
                 }
             }
-            Inst::SpanClass(kind) => {
+            Inst::SpanSet(i) => {
+                let set = &program.sets[i as usize];
                 while pos < hay.len() {
                     match decode(&hay[pos..]) {
-                        (Some(c), len) if kind.matches(c) => pos += len,
+                        (Some(c), len) if set.matches(c) => pos += len,
                         _ => break,
                     }
                 }

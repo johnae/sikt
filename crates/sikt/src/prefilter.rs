@@ -6,7 +6,7 @@
 
 use memchr::memmem::Finder;
 
-use crate::class::{Kind, char_len, decode};
+use crate::class::{CharSet, char_len, decode};
 use crate::syntax::{Expr, ExprKind};
 
 #[derive(Debug)]
@@ -104,14 +104,14 @@ impl ByteSet {
         (0..=255).filter(|&b| self.contains(b))
     }
 
-    fn of_kind(kind: Kind) -> Self {
+    fn of_set(chars: &CharSet) -> Self {
         let mut set = ByteSet::empty();
         for b in 0..0x80u8 {
-            if kind.matches(b as char) {
+            if chars.matches(b as char) {
                 set.insert(b);
             }
         }
-        if !matches!(kind, Kind::Digit | Kind::Hex | Kind::Punct) {
+        if chars.may_match_non_ascii() {
             NON_ASCII_LEADS.for_each(|b| set.insert(b));
         }
         set
@@ -131,7 +131,7 @@ fn first_bytes(e: &Expr) -> (ByteSet, bool) {
         },
         ExprKind::Any | ExprKind::Until(_) | ExprKind::Through(_) => (ByteSet::full(), true),
         ExprKind::Newline => (ByteSet::of(b"\r\n"), false),
-        ExprKind::Kind(kind) => (ByteSet::of_kind(*kind), false),
+        ExprKind::Class(set) => (ByteSet::of_set(set), false),
         ExprKind::Seq(items) => {
             let mut set = ByteSet::empty();
             for item in items {
@@ -183,7 +183,7 @@ fn literal_prefix(e: &Expr) -> (String, bool) {
     }
 }
 
-/// A pattern's leading `n C`, `n+ C` or `n..m C` for a character kind `C`.
+/// A pattern's leading `n C`, `n+ C` or `n..m C` for a character set `C`.
 ///
 /// Repetition is possessive, so starts inside one run of `C` mostly reach the
 /// same state: an unbounded repetition always stops at the end of the run.
@@ -192,7 +192,7 @@ fn literal_prefix(e: &Expr) -> (String, bool) {
 /// on where the match started.
 #[derive(Debug)]
 pub(crate) struct LeadingRun {
-    kind: Kind,
+    set: CharSet,
     min: usize,
     max: Option<usize>,
     /// The rest of the pattern can't match empty and can't start with `C`, so
@@ -217,7 +217,7 @@ impl LeadingRun {
         let ExprKind::Repeat { min, max, body } = &split_first(expr, &mut rest).kind else {
             return None;
         };
-        let ExprKind::Kind(kind) = body.kind else {
+        let ExprKind::Class(set) = &body.kind else {
             return None;
         };
         let mut rest_first = ByteSet::empty();
@@ -231,10 +231,10 @@ impl LeadingRun {
             }
         }
         Some(LeadingRun {
-            kind,
+            set: set.clone(),
             min: *min as usize,
             max: max.map(|m| m as usize),
-            rest_disjoint: !rest_nullable && !rest_first.intersects(&ByteSet::of_kind(kind)),
+            rest_disjoint: !rest_nullable && !rest_first.intersects(&ByteSet::of_set(set)),
         })
     }
 
@@ -243,7 +243,7 @@ impl LeadingRun {
         let mut chars = 0;
         while end < hay.len() {
             match decode(&hay[end..]) {
-                (Some(c), len) if self.kind.matches(c) => {
+                (Some(c), len) if self.set.matches(c) => {
                     end += len;
                     chars += 1;
                 }

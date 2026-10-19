@@ -1,0 +1,88 @@
+[[case]]
+name = "one of a string"
+pattern = '1+ one of "aeiou"'
+input = "beautiful"
+matches = ["eau", "i", "u"]
+
+[[case]]
+name = "one of a list"
+pattern = '1+ one of ("_" digit "a".."f")'
+input = "x_1af g"
+matches = ["_1af"]
+
+[[case]]
+name = "range"
+pattern = '2 one of "a".."c"'
+input = "abcd cb"
+matches = ["ab", "cb"]
+
+[[case]]
+name = "none of"
+pattern = 'field: 1+ none of ",;"'
+input = "a,bc;;d"
+matches = ["a", "bc", "d"]
+
+[[case]]
+name = "none of matches newline and multibyte"
+pattern = 'none of "x"'
+input = "\né"
+matches = ["\n", "é"]
+
+[[case]]
+name = "none of a kind"
+pattern = '1+ none of (digit space)'
+input = "ab 12 cd"
+matches = ["ab", "cd"]
+
+[[case]]
+name = "unicode range"
+pattern = '1+ one of "α".."ω"'
+input = "abc λόγος"
+matches = ["λ", "γος"]
+
+[[case]]
+name = "set with kinds and characters"
+pattern = 'one of (upper "_") 1+ wordchar'
+input = "a Foo _bar Ñu"
+matches = ["Foo", "_bar", "Ñu"]
+
+[[case]]
+name = "set is a prefilter"
+pattern = 'one of "xyz" digit'
+input = "a1 x2 b3 z4"
+matches = ["x2", "z4"]
+
+[[case]]
+name = "error: of is required"
+pattern = 'one "a"'
+error = "expected `of` after `one`"
+
+[[case]]
+name = "error: empty set"
+pattern = 'one of ()'
+error = "empty set"
+
+[[case]]
+name = "error: unclosed set"
+pattern = 'one of ("a" digit'
+error = "unclosed `(`"
+
+[[case]]
+name = "error: backwards range"
+pattern = 'one of "z".."a"'
+error = 'range "z".."a" is backwards'
+
+[[case]]
+name = "error: range of strings"
+pattern = 'one of "ab".."z"'
+error = "a range needs single characters"
+
+[[case]]
+name = "error: any in a set"
+pattern = 'one of (any)'
+error = "`any` can't be in a set"
+
+[[case]]
+name = "error: empty string in a set"
+pattern = 'one of ""'
+error = "empty string in a set"
