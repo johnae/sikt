@@ -18,6 +18,7 @@
     # Benchmarks against the tools sikt replaces
     pkgs.ripgrep
     pkgs.hyperfine
+    pkgs.perf
 
     # Luau bindings: the analyzer checks sikt.d.luau
     pkgs.luau

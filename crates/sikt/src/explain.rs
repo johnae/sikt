@@ -20,7 +20,6 @@ pub struct Explanation<'a> {
     position: usize,
     expected: Vec<String>,
     matched: Vec<String>,
-    first_line: usize,
 }
 
 impl<'a> Explanation<'a> {
@@ -37,15 +36,7 @@ impl<'a> Explanation<'a> {
             position,
             expected,
             matched,
-            first_line: 1,
         }
-    }
-
-    /// Numbers lines from `line` instead of 1, for a text that is part of a
-    /// larger one, like a single line of a file.
-    pub fn first_line(mut self, line: usize) -> Self {
-        self.first_line = line;
-        self
     }
 
     /// Byte offset where the closest attempt started.
@@ -70,7 +61,7 @@ impl<'a> Explanation<'a> {
 
     /// The 1-based line of [`position`](Self::position).
     pub fn line(&self) -> usize {
-        self.text[..self.position].matches('\n').count() + self.first_line
+        self.text[..self.position].matches('\n').count() + 1
     }
 }
 
@@ -132,15 +123,9 @@ mod tests {
     use crate::Pattern;
 
     #[test]
-    fn start_and_line_numbers() {
+    fn start_and_position() {
         let p = Pattern::new(r#""x" 3 digit"#).unwrap();
         let e = p.explain("ab x12a").unwrap().unwrap();
         assert_eq!((e.start(), e.position(), e.line()), (3, 6, 1));
-        let e = e.first_line(7);
-        assert_eq!(e.line(), 7);
-        assert!(
-            e.to_string()
-                .starts_with("no match. closest attempt on line 7:")
-        );
     }
 }

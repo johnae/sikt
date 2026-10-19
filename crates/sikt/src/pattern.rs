@@ -25,6 +25,8 @@ pub struct Pattern {
     prefilter: Prefilter,
     leading_run: Option<LeadingRun>,
     limits: Limits,
+    /// Matches stay within lines; see [`PatternBuilder::line_mode`].
+    line_mode: bool,
     warnings: Vec<Warning>,
 }
 
@@ -64,8 +66,11 @@ impl PatternBuilder {
         self
     }
 
-    /// The pattern will run on single lines without their line break, as the
-    /// `sikt` command does by default. Only affects warnings.
+    /// Run the pattern on each line without its line break, as the `sikt`
+    /// command does by default. Matches never cross lines, `text start` and
+    /// `text end` match at the ends of each line, and offsets are still into
+    /// the whole text. A line break at the end of the text doesn't start
+    /// another line.
     pub fn line_mode(mut self, yes: bool) -> Self {
         self.line_mode = yes;
         self
@@ -114,6 +119,7 @@ impl PatternBuilder {
             prefilter: Prefilter::new(&ast.main),
             leading_run: LeadingRun::new(&ast.main),
             limits: self.limits,
+            line_mode: self.line_mode,
             warnings,
         };
         Ok((pattern, ast))
@@ -182,37 +188,41 @@ impl Pattern {
     /// farthest, or `None` if there is a match. Tries every position, so it's
     /// slower than searching; meant for when a search came up empty.
     pub fn explain<'a>(&self, text: &'a str) -> Result<Option<Explanation<'a>>, MatchError> {
-        let hay = text.as_bytes();
         let mut scratch = Scratch::new(&self.program);
         // The attempt that got farthest from where it started; the first wins ties.
         let mut best = Trace::default();
         let mut best_start = 0;
         let mut best_progress = None;
-        let mut pos = 0;
-        while pos <= hay.len() {
-            let mut trace = Trace::default();
-            let found = vm::exec_traced(
-                &self.program,
-                hay,
-                pos,
-                &mut scratch,
-                self.limits,
-                &mut trace,
-            )?;
-            if found.is_some() {
-                return Ok(None);
+        for (window_start, window_end) in self.windows(text) {
+            let hay = &text.as_bytes()[window_start..window_end];
+            scratch.new_haystack();
+            let mut pos = 0;
+            while pos <= hay.len() {
+                let mut trace = Trace::default();
+                let found = vm::exec_traced(
+                    &self.program,
+                    hay,
+                    pos,
+                    &mut scratch,
+                    self.limits,
+                    &mut trace,
+                )?;
+                if found.is_some() {
+                    return Ok(None);
+                }
+                let progress = trace.farthest.map(|f| f - pos);
+                if progress > best_progress {
+                    best_progress = progress;
+                    best_start = window_start + pos;
+                    trace.farthest = trace.farthest.map(|f| window_start + f);
+                    best = trace;
+                }
+                pos += if pos < hay.len() {
+                    char_len(&hay[pos..])
+                } else {
+                    1
+                };
             }
-            let progress = trace.farthest.map(|f| f - pos);
-            if progress > best_progress {
-                best_progress = progress;
-                best_start = pos;
-                best = trace;
-            }
-            pos += if pos < hay.len() {
-                char_len(&hay[pos..])
-            } else {
-                1
-            };
         }
         let mut expected: Vec<String> = Vec::new();
         for span in best.failed.iter().filter_map(|&pc| self.program.spans[pc]) {
@@ -237,6 +247,25 @@ impl Pattern {
         )))
     }
 
+    /// The parts of `text` a match must stay within: each line in line mode,
+    /// otherwise all of it. An empty text still has one, so it can be explained.
+    fn windows(&self, text: &str) -> Vec<(usize, usize)> {
+        if !self.line_mode || text.is_empty() {
+            return vec![(0, text.len())];
+        }
+        let mut start = 0;
+        text.split_inclusive('\n')
+            .map(|chunk| {
+                let line = chunk
+                    .strip_suffix('\n')
+                    .map_or(chunk, |l| l.strip_suffix('\r').unwrap_or(l));
+                let window = (start, start + line.len());
+                start += chunk.len();
+                window
+            })
+            .collect()
+    }
+
     /// All non-overlapping matches, left to right. After an empty match the
     /// scan moves on one character. Stops after the first error.
     pub fn find_iter<'a>(&'a self, text: &'a str) -> FindIter<'a> {
@@ -244,6 +273,8 @@ impl Pattern {
             pattern: self,
             text,
             pos: 0,
+            window: (!self.line_mode).then_some(0..text.len()),
+            next_line: 0,
             scratch: Scratch::new(&self.program),
             done: false,
         }
@@ -279,6 +310,11 @@ pub struct FindIter<'a> {
     pattern: &'a Pattern,
     text: &'a str,
     pos: usize,
+    /// The part of the text being searched: all of it, or in line mode the
+    /// current line without its line break. `None` between lines.
+    window: Option<Range<usize>>,
+    /// In line mode, where the line after the window starts.
+    next_line: usize,
     scratch: Scratch,
     done: bool,
 }
@@ -287,12 +323,28 @@ impl<'a> Iterator for FindIter<'a> {
     type Item = Result<Match<'a>, MatchError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.done {
-            return None;
+        while !self.done {
+            if self.window.is_some()
+                && let Some(found) = self.search_window()
+            {
+                return Some(found);
+            }
+            if !self.pattern.line_mode || !self.enter_next_line() {
+                self.done = true;
+            }
         }
-        let hay = self.text.as_bytes();
+        None
+    }
+}
+
+impl<'a> FindIter<'a> {
+    /// The next match in the window, or `None` once it has no more.
+    fn search_window(&mut self) -> Option<Result<Match<'a>, MatchError>> {
+        let window = self.window.clone().expect("searching a window");
+        let base = window.start;
+        let hay = &self.text.as_bytes()[window];
         let program = &self.pattern.program;
-        while let Some(candidate) = self.pattern.prefilter.find(hay, self.pos) {
+        while let Some(candidate) = self.pattern.prefilter.find(hay, self.pos - base) {
             let plan = self
                 .pattern
                 .leading_run
@@ -301,7 +353,7 @@ impl<'a> Iterator for FindIter<'a> {
             let (start, on_fail) = match plan {
                 RunPlan::Normal => (candidate, None),
                 RunPlan::Skip(end) => {
-                    self.pos = end;
+                    self.pos = base + end;
                     continue;
                 }
                 RunPlan::Attempt { start, on_fail } => (start, Some(on_fail)),
@@ -317,25 +369,59 @@ impl<'a> Iterator for FindIter<'a> {
                     return Some(Err(e));
                 }
                 Ok(Some(end)) => {
-                    self.pos = if end > start { end } else { start + step };
-                    let captures = collect_captures(&self.scratch.captures);
+                    self.pos = base + if end > start { end } else { start + step };
+                    let captures = collect_captures(&self.scratch.captures, base);
                     return Some(Ok(Match {
                         pattern: self.pattern,
                         text: self.text,
-                        range: start..end,
+                        range: base + start..base + end,
                         captures,
                     }));
                 }
-                Ok(None) => self.pos = on_fail.unwrap_or(start + step),
+                Ok(None) => self.pos = base + on_fail.unwrap_or(start + step),
             }
         }
-        self.done = true;
+        self.window = None;
         None
+    }
+
+    /// Moves the window to the next line where a match could start, using the
+    /// prefilter over the rest of the text to skip lines. `false` at the end.
+    fn enter_next_line(&mut self) -> bool {
+        let bytes = self.text.as_bytes();
+        let mut pos = self.next_line;
+        // A line break at the very end doesn't start another line.
+        while pos < bytes.len() {
+            let Some(candidate) = self.pattern.prefilter.find(bytes, pos) else {
+                return false;
+            };
+            let start = memchr::memrchr(b'\n', &bytes[pos..candidate]).map_or(pos, |i| pos + i + 1);
+            let (end, next) = match memchr::memchr(b'\n', &bytes[candidate..]) {
+                Some(i) => {
+                    let newline = candidate + i;
+                    let crlf = newline > start && bytes[newline - 1] == b'\r';
+                    (if crlf { newline - 1 } else { newline }, newline + 1)
+                }
+                None => (bytes.len(), bytes.len()),
+            };
+            if candidate > end {
+                // The candidate is the line break itself.
+                pos = next;
+                continue;
+            }
+            self.window = Some(start..end);
+            self.next_line = next;
+            self.pos = candidate;
+            self.scratch.new_haystack();
+            return true;
+        }
+        false
     }
 }
 
-/// Pairs open and close events into `(slot, range)`, in closing order.
-fn collect_captures(events: &[CaptureEvent]) -> Vec<(u32, Range<usize>)> {
+/// Pairs open and close events into `(slot, range)`, in closing order, with
+/// offsets moved by `base`.
+fn collect_captures(events: &[CaptureEvent], base: usize) -> Vec<(u32, Range<usize>)> {
     let mut open = Vec::new();
     let mut out = Vec::new();
     for event in events {
@@ -343,7 +429,7 @@ fn collect_captures(events: &[CaptureEvent]) -> Vec<(u32, Range<usize>)> {
             open.push(event.pos);
         } else {
             let start = open.pop().expect("captures are nested");
-            out.push((event.slot, start..event.pos));
+            out.push((event.slot, base + start..base + event.pos));
         }
     }
     out
@@ -503,6 +589,21 @@ mod tests {
             let Ok(p) = Pattern::new(&src) else { return Ok(()) };
             let fast: Vec<_> = p.find_iter(&input).map(|m| m.unwrap().range()).collect();
             prop_assert_eq!(fast, naive(&p, &input), "pattern `{}`", src);
+        }
+
+        #[test]
+        fn line_mode_is_searching_each_line(src in pattern(), input in "[ab12x\\- é\n\r]{0,30}") {
+            let Ok(whole) = Pattern::builder().line_mode(true).build(&src) else { return Ok(()) };
+            let per_line = Pattern::new(&src).unwrap();
+            let found: Vec<_> = whole.find_iter(&input).map(|m| m.unwrap().range()).collect();
+            let mut expected = Vec::new();
+            let mut start = 0;
+            for chunk in input.split_inclusive('\n') {
+                let line = chunk.strip_suffix('\n').map_or(chunk, |l| l.strip_suffix('\r').unwrap_or(l));
+                expected.extend(per_line.find_iter(line).map(|m| { let r = m.unwrap().range(); start + r.start..start + r.end }));
+                start += chunk.len();
+            }
+            prop_assert_eq!(found, expected, "pattern `{}`", src);
         }
 
         #[test]

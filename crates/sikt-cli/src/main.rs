@@ -9,7 +9,7 @@ use clap::{Parser, ValueEnum};
 use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme};
 use sikt::{Action, Match, Program};
 
-use crate::output::{Line, Style, lines, quote};
+use crate::output::{Style, quote};
 
 /// Search and replace text with readable patterns.
 ///
@@ -51,7 +51,8 @@ struct Args {
     /// Show line numbers.
     #[arg(short = 'n', long)]
     line_number: bool,
-    /// Print one JSON record per match, with captures, file, line and span.
+    /// Print one JSON record per match: file, line, byte offsets into the file,
+    /// text and captures.
     #[arg(long)]
     json: bool,
     /// When nothing matches, show the closest attempt.
@@ -196,14 +197,6 @@ struct Search<'a> {
     failed: bool,
 }
 
-/// A match and the line it starts on.
-struct Found<'t> {
-    line: usize,
-    /// Byte offset of the text the match was found in, within the file.
-    base: usize,
-    m: Match<'t>,
-}
-
 impl Search<'_> {
     fn fail(&mut self, message: &str) {
         eprintln!("sikt: {message}");
@@ -212,7 +205,9 @@ impl Search<'_> {
 
     fn file(&mut self, path: &Path, walked: bool) -> io::Result<()> {
         let name = path.strip_prefix(".").unwrap_or(path).display().to_string();
-        let bytes = match fs::read(path) {
+        // A file that may be rewritten is read, never mapped.
+        let replacing = self.program.action() == Action::Replace;
+        let bytes = match Contents::load(path, !replacing) {
             Ok(bytes) => bytes,
             Err(e) => {
                 self.fail(&format!("{name}: {e}"));
@@ -222,156 +217,167 @@ impl Search<'_> {
         if walked && bytes[..bytes.len().min(8192)].contains(&0) {
             return Ok(());
         }
-        match String::from_utf8(bytes) {
-            Ok(text) => self.text(&name, Some(path), &text),
-            Err(_) if self.program.action() == Action::Replace => {
+        match std::str::from_utf8(&bytes) {
+            Ok(text) => self.text(&name, Some(path), text),
+            Err(_) if replacing => {
                 eprintln!("sikt: skipping {name}: not valid UTF-8");
                 Ok(())
             }
-            Err(e) => self.text(&name, Some(path), &String::from_utf8_lossy(e.as_bytes())),
+            Err(_) => self.text(&name, Some(path), &String::from_utf8_lossy(&bytes)),
         }
     }
 
-    /// Searches one text: stdin or a file's contents.
+    /// Searches one text: stdin or a file's contents. Matches stream to the
+    /// output as they're found.
     fn text(&mut self, name: &str, path: Option<&Path>, text: &str) -> io::Result<()> {
-        let program = self.program;
-        let mut found = Vec::new();
+        let (args, program) = (self.args, self.program);
+        let bytes = text.as_bytes();
+        let numbered = args.json || args.only_matching;
+        let mut count = 0;
+        // Line numbers count on from the previous match.
+        let (mut counted, mut line) = (0, 1);
+        let mut spans = Vec::new();
         let mut replaced = String::new();
-        if self.args.multiline {
-            // Line numbers count on from the previous match.
-            let (mut counted, mut line) = (0, 1);
-            for m in program.find_iter(text) {
-                match m {
-                    Ok(m) => {
-                        line += text[counted..m.start()].matches('\n').count();
-                        counted = m.start();
-                        found.push(Found { line, base: 0, m });
-                    }
-                    Err(e) => {
-                        self.fail(&format!("{name}: {e}"));
-                        return Ok(());
-                    }
+        let mut replaced_up_to = 0;
+        for m in program.find_iter(text) {
+            let m = match m {
+                Ok(m) => m,
+                Err(e) => {
+                    self.fail(&format!("{name}: {e}"));
+                    return Ok(());
                 }
+            };
+            count += 1;
+            if args.files_with_matches {
+                break;
             }
-            replaced = splice(program, text, found.iter().map(|f| &f.m));
-        } else {
-            for (i, line) in lines(text).enumerate() {
-                let start = found.len();
-                for m in program.find_iter(line.text) {
-                    match m {
-                        Ok(m) => found.push(Found {
-                            line: i + 1,
-                            base: line.start,
-                            m,
-                        }),
-                        Err(e) => {
-                            self.fail(&format!("{name}:{}: {e}", i + 1));
-                            return Ok(());
-                        }
-                    }
+            if args.count {
+                continue;
+            }
+            if numbered {
+                line += memchr::memchr_iter(b'\n', &bytes[counted..m.start()]).count();
+                counted = m.start();
+            }
+            if args.json {
+                self.json(name, line, &m)?;
+                continue;
+            }
+            match program.action() {
+                Action::Print => writeln!(self.out, "{}", program.render(&m).unwrap_or_default())?,
+                Action::Replace => {
+                    replaced.push_str(&text[replaced_up_to..m.start()]);
+                    replaced.push_str(&program.render(&m).unwrap_or_default());
+                    replaced_up_to = m.end();
                 }
-                replaced.push_str(&splice(
-                    program,
-                    line.text,
-                    found[start..].iter().map(|f| &f.m),
-                ));
-                replaced.push_str(line.ending);
+                Action::Find if args.only_matching => {
+                    self.lead(name, line)?;
+                    self.style.matched(&mut self.out, m.as_str())?;
+                    writeln!(self.out)?;
+                }
+                Action::Find => spans.push((m.start(), m.end())),
             }
         }
-        self.found |= !found.is_empty();
+        self.found |= count > 0;
 
-        let args = self.args;
         if args.files_with_matches {
-            if !found.is_empty() {
-                writeln!(self.out, "{}", self.style.path(name))?;
+            if count > 0 {
+                self.style.path(&mut self.out, name)?;
+                writeln!(self.out)?;
             }
         } else if args.count {
-            match (found.len(), self.prefix) {
-                (0, true) => {}
-                (n, true) => writeln!(self.out, "{}:{n}", self.style.path(name))?,
-                (n, false) => writeln!(self.out, "{n}")?,
+            if self.prefix && count > 0 {
+                self.style.path(&mut self.out, name)?;
+                write!(self.out, ":")?;
             }
-        } else if args.json {
-            for f in &found {
-                self.json(name, f)?;
+            if !self.prefix || count > 0 {
+                writeln!(self.out, "{count}")?;
             }
-        } else {
+        } else if !args.json {
             match program.action() {
-                Action::Print => {
-                    for f in &found {
-                        let line = program.render(&f.m).unwrap_or_default();
-                        writeln!(self.out, "{line}")?;
-                    }
+                Action::Replace => {
+                    replaced.push_str(&text[replaced_up_to..]);
+                    self.replace(name, path, text, &replaced)?;
                 }
-                Action::Replace => self.replace(name, path, text, &replaced)?,
-                Action::Find if args.only_matching => {
-                    for f in &found {
-                        let lead = self.lead(name, f.line);
-                        writeln!(self.out, "{lead}{}", self.style.matched(f.m.as_str()))?;
-                    }
-                }
-                Action::Find => self.matching_lines(name, text, &found)?,
+                Action::Find if !args.only_matching => self.matching_lines(name, text, &spans)?,
+                Action::Find | Action::Print => {}
             }
         }
 
-        if found.is_empty() && args.explain {
+        if count == 0 && args.explain {
             self.explain(text)?;
         }
         Ok(())
     }
 
     /// `path:line:` or `line:`, as the options call for.
-    fn lead(&self, name: &str, line: usize) -> String {
+    fn lead(&mut self, name: &str, line: usize) -> io::Result<()> {
         if self.prefix {
-            format!(
-                "{}:{}:",
-                self.style.path(name),
-                self.style.line_number(line)
-            )
-        } else if self.args.line_number {
-            format!("{}:", self.style.line_number(line))
-        } else {
-            String::new()
+            self.style.path(&mut self.out, name)?;
+            write!(self.out, ":")?;
         }
+        if self.prefix || self.args.line_number {
+            self.style.line_number(&mut self.out, line)?;
+            write!(self.out, ":")?;
+        }
+        Ok(())
     }
 
-    /// Each line with a match, highlighted. In multiline mode, each line a
-    /// match spans.
-    fn matching_lines(&mut self, name: &str, text: &str, found: &[Found]) -> io::Result<()> {
-        // Matches are sorted and don't overlap, so one cursor walks them along
-        // with the lines.
-        let spans: Vec<(usize, usize)> = found
-            .iter()
-            .map(|f| (f.base + f.m.start(), f.base + f.m.end()))
-            .collect();
+    /// Each line with a match, highlighted; a match across lines shows each
+    /// line it covers. Jumps from match to match, so lines without one cost
+    /// nothing but counting.
+    fn matching_lines(
+        &mut self,
+        name: &str,
+        text: &str,
+        spans: &[(usize, usize)],
+    ) -> io::Result<()> {
+        let bytes = text.as_bytes();
+        let (mut counted, mut number) = (0, 1);
         let mut first = 0;
-        for (i, line) in lines(text).enumerate() {
-            // A match that ends right where this line starts belongs to the line before.
-            while spans.get(first).is_some_and(|&(start, stop)| {
-                stop < line.start || (stop == line.start && start < line.start)
-            }) {
-                first += 1;
+        let mut line_start = 0;
+        while let Some(&(start, _)) = spans.get(first) {
+            if start >= line_start {
+                line_start = memchr::memrchr(b'\n', &bytes[line_start..start])
+                    .map_or(line_start, |i| line_start + i + 1);
             }
-            if first == spans.len() {
-                break;
-            }
-            let end = line.start + line.text.len();
+            let newline = memchr::memchr(b'\n', &bytes[line_start..]).map(|i| line_start + i);
+            let (end, next) = match newline {
+                Some(nl) if nl > line_start && bytes[nl - 1] == b'\r' => (nl - 1, nl + 1),
+                Some(nl) => (nl, nl + 1),
+                None => (bytes.len(), bytes.len() + 1),
+            };
+            number += memchr::memchr_iter(b'\n', &bytes[counted..line_start]).count();
+            counted = line_start;
             let hits: Vec<_> = spans[first..]
                 .iter()
                 .take_while(|&&(start, _)| start <= end)
                 .map(|&(start, stop)| {
-                    start.max(line.start) - line.start..stop.min(end) - line.start
+                    start.max(line_start) - line_start..stop.min(end) - line_start
                 })
                 .collect();
             if !hits.is_empty() {
-                let lead = self.lead(name, i + 1);
-                writeln!(self.out, "{lead}{}", self.style.highlight(line.text, &hits))?;
+                self.lead(name, number)?;
+                self.style
+                    .highlight(&mut self.out, &text[line_start..end], &hits)?;
+                writeln!(self.out)?;
+            }
+            // Matches that end on this line are done; one that runs on
+            // shows again on the next line.
+            while spans
+                .get(first)
+                .is_some_and(|&(start, stop)| start <= end && stop <= next)
+            {
+                first += 1;
+            }
+            line_start = next;
+            if line_start > bytes.len() {
+                break;
             }
         }
         Ok(())
     }
 
-    fn json(&mut self, name: &str, f: &Found) -> io::Result<()> {
+    fn json(&mut self, name: &str, line: usize, m: &Match) -> io::Result<()> {
         let captures: serde_json::Map<String, serde_json::Value> = self
             .program
             .pattern()
@@ -379,16 +385,16 @@ impl Search<'_> {
             .map(|n| {
                 (
                     n.to_owned(),
-                    f.m.get(n).map_or(serde_json::Value::Null, Into::into),
+                    m.get(n).map_or(serde_json::Value::Null, Into::into),
                 )
             })
             .collect();
         let record = serde_json::json!({
             "path": name,
-            "line": f.line,
-            "start": f.m.start(),
-            "end": f.m.end(),
-            "text": f.m.as_str(),
+            "line": line,
+            "start": m.start(),
+            "end": m.end(),
+            "text": m.as_str(),
             "captures": captures,
         });
         writeln!(self.out, "{record}")
@@ -425,40 +431,7 @@ impl Search<'_> {
             self.fail("--explain works on one input at a time");
             return Ok(());
         }
-        let pattern = self.program.pattern();
-        let explanation = if self.args.multiline {
-            pattern.explain(text)
-        } else {
-            let mut best: Option<sikt::Explanation> = None;
-            let mut lines: Vec<Line> = lines(text).collect();
-            if lines.is_empty() {
-                lines.push(Line {
-                    start: 0,
-                    text: "",
-                    ending: "",
-                });
-            }
-            for (i, line) in lines.iter().enumerate() {
-                match pattern.explain(line.text) {
-                    Ok(Some(e)) => {
-                        let progress = e.position() - e.start();
-                        if best
-                            .as_ref()
-                            .is_none_or(|b| progress > b.position() - b.start())
-                        {
-                            best = Some(e.first_line(i + 1));
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        self.fail(&e.to_string());
-                        return Ok(());
-                    }
-                }
-            }
-            Ok(best)
-        };
-        match explanation {
+        match self.program.pattern().explain(text) {
             Ok(Some(e)) => eprintln!("{e}"),
             Ok(None) => eprintln!("the pattern matches, but `where` rejected every match"),
             Err(e) => self.fail(&e.to_string()),
@@ -467,19 +440,37 @@ impl Search<'_> {
     }
 }
 
-/// `text` with each match replaced by the program's output for it.
-fn splice<'b, 'm: 'b>(
-    program: &Program,
-    text: &str,
-    matches: impl Iterator<Item = &'b Match<'m>>,
-) -> String {
-    let mut out = String::new();
-    let mut last = 0;
-    for m in matches {
-        out.push_str(&text[last..m.start()]);
-        out.push_str(&program.render(m).unwrap_or_default());
-        last = m.end();
+/// Files at least this large are mapped instead of read.
+const MAP_AT: u64 = 1 << 16;
+
+/// A file's bytes: mapped when it's large and only searched, read otherwise.
+enum Contents {
+    Read(Vec<u8>),
+    Mapped(memmap2::Mmap),
+}
+
+impl Contents {
+    fn load(path: &Path, map: bool) -> io::Result<Contents> {
+        let mut file = fs::File::open(path)?;
+        if map && file.metadata()?.len() >= MAP_AT {
+            // SAFETY: the map is only read. If another process changes the
+            // file during the search, the search can see a mix of old and new
+            // text, the same as ripgrep's mapped reads.
+            return Ok(Contents::Mapped(unsafe { memmap2::Mmap::map(&file)? }));
+        }
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes)?;
+        Ok(Contents::Read(bytes))
     }
-    out.push_str(&text[last..]);
-    out
+}
+
+impl std::ops::Deref for Contents {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        match self {
+            Contents::Read(bytes) => bytes,
+            Contents::Mapped(map) => map,
+        }
+    }
 }

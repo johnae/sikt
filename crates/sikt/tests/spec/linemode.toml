@@ -1,0 +1,122 @@
+# Line mode: the pattern runs on each line without its line break, as if each
+# line were its own text. Offsets are still into the whole text.
+
+[[case]]
+name = "matches don't cross lines"
+pattern = '"a" any "b"'
+line_mode = true
+input = "a\nb axb"
+matches = [{ text = "axb", at = 4 }]
+
+[[case]]
+name = "text start and end are the line's"
+pattern = 'text start "x" or "y" text end'
+line_mode = true
+input = "x y\nx\r\ny"
+matches = [{ text = "x", at = 0 }, { text = "y", at = 2 }, { text = "x", at = 4 }, { text = "y", at = 7 }]
+
+[[case]]
+name = "until stops at the end of the line"
+pattern = '"[" until "]"'
+line_mode = true
+input = "[a\n]"
+matches = []
+
+[[case]]
+name = "line breaks are not part of a line"
+pattern = '1+ any'
+line_mode = true
+input = "ab\r\ncd\n\nef"
+matches = [{ text = "ab", at = 0 }, { text = "cd", at = 4 }, { text = "ef", at = 8 }]
+
+[[case]]
+name = "empty matches on every line"
+pattern = 'optional "z"'
+line_mode = true
+input = "ab\nc"
+matches = [{ text = "", at = 0 }, { text = "", at = 1 }, { text = "", at = 2 }, { text = "", at = 3 }, { text = "", at = 4 }]
+
+[[case]]
+name = "no line after a final line break"
+pattern = 'optional "z"'
+line_mode = true
+input = "a\n"
+matches = [{ text = "", at = 0 }, { text = "", at = 1 }]
+
+[[case]]
+name = "empty text has no lines"
+pattern = 'optional "z"'
+line_mode = true
+input = ""
+matches = []
+
+[[case]]
+name = "empty lines"
+pattern = 'line start line end'
+line_mode = true
+input = "a\n\n\nb"
+matches = [{ text = "", at = 2 }, { text = "", at = 3 }]
+
+[[case]]
+name = "captures use offsets into the whole text"
+pattern = 'n: digit'
+line_mode = true
+input = "a\nb1"
+matches = [{ text = "1", at = 3, captures = { n = "1" } }]
+
+[[case]]
+name = "literal prefilter skips lines"
+pattern = '"ERROR" ":"'
+line_mode = true
+input = "x\nERROR:1\nERROR\n:2"
+matches = [{ text = "ERROR:", at = 2 }]
+
+[[case]]
+name = "byte prefilter finds a line break"
+pattern = 'none of "x"'
+line_mode = true
+input = "x\nxa"
+matches = [{ text = "a", at = 3 }]
+
+[[case]]
+name = "runs end at the end of the line"
+pattern = '1+ digit "x"'
+line_mode = true
+input = "12\n3x"
+matches = [{ text = "3x", at = 3 }]
+
+[[case]]
+name = "lookbehind doesn't see the line before"
+pattern = 'after "a" "b"'
+line_mode = true
+input = "a\nb ab"
+matches = [{ text = "b", at = 5 }]
+
+[[case]]
+name = "explain picks the line that got farthest"
+pattern = '"[" level: 1+ upper "] " digit'
+line_mode = true
+input = "plain\n[WARN] x\n[E"
+explain = '''
+no match. closest attempt on line 2:
+  matched `level`, then expected digit but found "x"
+  [WARN] x
+         ^'''
+
+[[case]]
+name = "until searches each line afresh"
+pattern = 'until "-"'
+line_mode = true
+input = "a\nb-"
+matches = [{ text = "b", at = 2 }, { text = "", at = 3 }]
+
+[[case]]
+name = "explain searches each line afresh"
+pattern = 'until "-" "-" digit'
+line_mode = true
+input = "a\nb-x"
+explain = '''
+no match. closest attempt on line 2:
+  expected digit but found "x"
+  b-x
+    ^'''

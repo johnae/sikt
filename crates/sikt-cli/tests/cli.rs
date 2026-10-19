@@ -233,8 +233,8 @@ fn json_records() {
     assert_eq!(
         records,
         [
-            serde_json::json!({"path": "<stdin>", "line": 2, "start": 0, "end": 3, "text": "a=1", "captures": {"k": "a", "v": "1"}}),
-            serde_json::json!({"path": "<stdin>", "line": 2, "start": 4, "end": 8, "text": "b=22", "captures": {"k": "b", "v": "22"}}),
+            serde_json::json!({"path": "<stdin>", "line": 2, "start": 2, "end": 5, "text": "a=1", "captures": {"k": "a", "v": "1"}}),
+            serde_json::json!({"path": "<stdin>", "line": 2, "start": 6, "end": 10, "text": "b=22", "captures": {"k": "b", "v": "22"}}),
         ]
     );
 }
@@ -339,4 +339,34 @@ fn many_matches_stay_fast() {
             .assert()
             .success();
     }
+}
+
+#[test]
+fn multiline_match_over_several_lines() {
+    sikt()
+        .args(["-U", "-n", r#""b" newline "c" newline "d""#])
+        .write_stdin("a\nb\nc\nd\ne\n")
+        .assert()
+        .success()
+        .stdout("2:b\n3:c\n4:d\n");
+}
+
+#[test]
+fn multiline_match_ending_in_a_line_break_shows_one_line() {
+    sikt()
+        .args(["-U", r#""b" newline"#])
+        .write_stdin("a\nb\nc\n")
+        .assert()
+        .success()
+        .stdout("b\n");
+}
+
+#[test]
+fn line_numbers_skip_lines_without_matches() {
+    sikt()
+        .args(["-n", r#""x""#])
+        .write_stdin("a\nx\nb\nc\nxx\n")
+        .assert()
+        .success()
+        .stdout("2:x\n5:xx\n");
 }

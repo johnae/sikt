@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 63c53f045f249b0f1d905476353a664c528997682dfb892ced3981e410680c75 # shrinks to src = "optional letter", input = "aa"
+cc 2ce0889d5debe27c46145b49f2cd16b460156a38edeedcea6cd0edb8b39c5d14 # shrinks to src = "2 until \"-\"", input = "\n-"

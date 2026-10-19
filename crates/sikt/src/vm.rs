@@ -46,6 +46,11 @@ impl Scratch {
             ..Scratch::default()
         }
     }
+
+    /// Forgets what was learned about one haystack, before searching another.
+    pub fn new_haystack(&mut self) {
+        self.until.fill(None);
+    }
 }
 
 /// Runs one anchored attempt at `start`. On a match, returns its end and
