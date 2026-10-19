@@ -6,7 +6,7 @@
 
 use memchr::memmem::Finder;
 
-use crate::class::Kind;
+use crate::class::{Kind, char_len, decode};
 use crate::syntax::{Expr, ExprKind};
 
 #[derive(Debug)]
@@ -86,6 +86,10 @@ impl ByteSet {
         for (a, b) in self.0.iter_mut().zip(other.0) {
             *a |= b;
         }
+    }
+
+    fn intersects(&self, other: &ByteSet) -> bool {
+        self.0.iter().zip(other.0).any(|(&a, b)| a && b)
     }
 
     fn contains(&self, b: u8) -> bool {
@@ -176,6 +180,113 @@ fn literal_prefix(e: &Expr) -> (String, bool) {
         ExprKind::Capture { body, .. } => literal_prefix(body),
         ExprKind::Repeat { min, body, .. } if *min >= 1 => (literal_prefix(body).0, false),
         _ => (String::new(), false),
+    }
+}
+
+/// A pattern's leading `n C`, `n+ C` or `n..m C` for a character kind `C`.
+///
+/// Repetition is possessive, so starts inside one run of `C` mostly reach the
+/// same state: an unbounded repetition always stops at the end of the run.
+/// When an attempt fails there, later starts in the run fail too, and the scan
+/// can skip to the run's end. This holds because nothing after the run depends
+/// on where the match started.
+#[derive(Debug)]
+pub(crate) struct LeadingRun {
+    kind: Kind,
+    min: usize,
+    max: Option<usize>,
+    /// The rest of the pattern can't match empty and can't start with `C`, so
+    /// a bounded repetition must reach the end of the run to match.
+    rest_disjoint: bool,
+}
+
+/// What to do at a candidate start, according to [`LeadingRun::plan`].
+#[derive(Debug)]
+pub(crate) enum RunPlan {
+    /// Not in a run; attempt here as usual.
+    Normal,
+    /// No start in this run can match; resume the scan here.
+    Skip(usize),
+    /// Attempt at `start`; if it fails, resume at `on_fail`.
+    Attempt { start: usize, on_fail: usize },
+}
+
+impl LeadingRun {
+    pub fn new(expr: &Expr) -> Option<Self> {
+        let mut rest = Vec::new();
+        let ExprKind::Repeat { min, max, body } = &split_first(expr, &mut rest).kind else {
+            return None;
+        };
+        let ExprKind::Kind(kind) = body.kind else {
+            return None;
+        };
+        let mut rest_first = ByteSet::empty();
+        let mut rest_nullable = true;
+        for item in rest.iter().rev() {
+            let (first, nullable) = first_bytes(item);
+            rest_first.union(&first);
+            if !nullable {
+                rest_nullable = false;
+                break;
+            }
+        }
+        Some(LeadingRun {
+            kind,
+            min: *min as usize,
+            max: max.map(|m| m as usize),
+            rest_disjoint: !rest_nullable && !rest_first.intersects(&ByteSet::of_kind(kind)),
+        })
+    }
+
+    pub fn plan(&self, hay: &[u8], pos: usize) -> RunPlan {
+        let mut end = pos;
+        let mut chars = 0;
+        while end < hay.len() {
+            match decode(&hay[end..]) {
+                (Some(c), len) if self.kind.matches(c) => {
+                    end += len;
+                    chars += 1;
+                }
+                _ => break,
+            }
+        }
+        if chars == 0 {
+            return RunPlan::Normal;
+        }
+        if chars < self.min {
+            return RunPlan::Skip(end);
+        }
+        match self.max {
+            None => RunPlan::Attempt {
+                start: pos,
+                on_fail: end,
+            },
+            // Only a start that can take the rest of the run can match.
+            Some(max) if self.rest_disjoint => {
+                let mut start = pos;
+                for _ in max..chars {
+                    start += char_len(&hay[start..]);
+                }
+                RunPlan::Attempt {
+                    start,
+                    on_fail: end,
+                }
+            }
+            Some(_) => RunPlan::Normal,
+        }
+    }
+}
+
+/// The first item of `e` through captures and sequences. Pushes the items
+/// that follow it onto `rest`, last item first.
+fn split_first<'a>(e: &'a Expr, rest: &mut Vec<&'a Expr>) -> &'a Expr {
+    match &e.kind {
+        ExprKind::Capture { body, .. } => split_first(body, rest),
+        ExprKind::Seq(items) => {
+            rest.extend(items[1..].iter().rev());
+            split_first(&items[0], rest)
+        }
+        _ => e,
     }
 }
 

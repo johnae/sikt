@@ -4,7 +4,7 @@ use std::ops::Range;
 use crate::class::char_len;
 use crate::compile::{Program, compile};
 use crate::error::{Error, MatchError};
-use crate::prefilter::Prefilter;
+use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::syntax::parse;
 use crate::vm::{self, CaptureEvent, Scratch};
 
@@ -15,6 +15,7 @@ pub struct Pattern {
     source: String,
     program: Program,
     prefilter: Prefilter,
+    leading_run: Option<LeadingRun>,
     max_steps: u64,
 }
 
@@ -45,6 +46,7 @@ impl PatternBuilder {
             source: source.to_owned(),
             program,
             prefilter: Prefilter::new(&expr),
+            leading_run: LeadingRun::new(&expr),
             max_steps: self.max_steps,
         })
     }
@@ -111,7 +113,20 @@ impl<'a> Iterator for FindIter<'a> {
         }
         let hay = self.text.as_bytes();
         let program = &self.pattern.program;
-        while let Some(start) = self.pattern.prefilter.find(hay, self.pos) {
+        while let Some(candidate) = self.pattern.prefilter.find(hay, self.pos) {
+            let plan = self
+                .pattern
+                .leading_run
+                .as_ref()
+                .map_or(RunPlan::Normal, |run| run.plan(hay, candidate));
+            let (start, on_fail) = match plan {
+                RunPlan::Normal => (candidate, None),
+                RunPlan::Skip(end) => {
+                    self.pos = end;
+                    continue;
+                }
+                RunPlan::Attempt { start, on_fail } => (start, Some(on_fail)),
+            };
             let step = if start < hay.len() {
                 char_len(&hay[start..])
             } else {
@@ -138,7 +153,7 @@ impl<'a> Iterator for FindIter<'a> {
                         captures,
                     }));
                 }
-                Ok(None) => self.pos = start + step,
+                Ok(None) => self.pos = on_fail.unwrap_or(start + step),
             }
         }
         self.done = true;
@@ -232,5 +247,82 @@ impl<'a> Match<'a> {
             .iter()
             .position(|n| n == name)
             .map(|s| s as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+
+    /// Matches by attempting at every position, without prefilters or run
+    /// skipping.
+    fn naive(p: &Pattern, text: &str) -> Vec<Range<usize>> {
+        let hay = text.as_bytes();
+        let mut scratch = Scratch::new(&p.program);
+        let mut out = Vec::new();
+        let mut pos = 0;
+        while pos <= hay.len() {
+            let step = if pos < hay.len() {
+                char_len(&hay[pos..])
+            } else {
+                1
+            };
+            match vm::exec(&p.program, hay, pos, &mut scratch, p.max_steps).unwrap() {
+                Some(end) => {
+                    out.push(pos..end);
+                    pos = if end > pos { end } else { pos + step };
+                }
+                None => pos += step,
+            }
+        }
+        out
+    }
+
+    fn pattern() -> impl Strategy<Value = String> {
+        let atom = prop::sample::select(vec![
+            r#""a""#,
+            r#""ab""#,
+            r#""-""#,
+            r#""é""#,
+            "digit",
+            "letter",
+            "wordchar",
+            "space",
+            "any",
+            "newline",
+            r#"("a" or digit)"#,
+            r#"until "-""#,
+            "through digit",
+        ]);
+        let prefix = prop::sample::select(vec![
+            "",
+            "",
+            "1+ ",
+            "0+ ",
+            "2 ",
+            "2..3 ",
+            "optional ",
+            "n: ",
+        ]);
+        prop::collection::vec((prefix, atom), 1..4).prop_map(|items| {
+            items
+                .iter()
+                .map(|(q, a)| format!("{q}{a}"))
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(3000))]
+
+        #[test]
+        fn optimized_scan_matches_naive_scan(src in pattern(), input in "[ab12x\\- é\n]{0,24}") {
+            let Ok(p) = Pattern::new(&src) else { return Ok(()) };
+            let fast: Vec<_> = p.find_iter(&input).map(|m| m.unwrap().range()).collect();
+            prop_assert_eq!(fast, naive(&p, &input), "pattern `{}`", src);
+        }
     }
 }

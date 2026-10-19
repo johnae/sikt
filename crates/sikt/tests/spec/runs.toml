@@ -1,0 +1,69 @@
+# Patterns that start with a repeated character kind. When a match fails in a
+# run of that kind, the scan can skip later starts in the same run; these
+# check that it never skips a real match.
+
+[[case]]
+name = "unbounded run"
+pattern = '1+ digit "x"'
+input = "123 45x 6x"
+matches = ["45x", "6x"]
+
+[[case]]
+name = "run shorter than the minimum"
+pattern = '3+ letter "!"'
+input = "ab! abc!"
+matches = ["abc!"]
+
+[[case]]
+name = "exact count starts late in a long run"
+pattern = '4 digit "-"'
+input = "12345-6 1234-"
+matches = [{ text = "2345-", at = 1 }, "1234-"]
+
+[[case]]
+name = "range starts late in a long run"
+pattern = '2..3 digit "x"'
+input = "12345x"
+matches = [{ text = "345x", at = 2 }]
+
+[[case]]
+name = "rest can start with the same kind"
+pattern = '2..3 digit 0+ digit "x"'
+input = "12345x"
+matches = ["12345x"]
+
+[[case]]
+name = "rest can be empty"
+pattern = '2..3 digit optional "x"'
+input = "12345"
+matches = ["123", "45"]
+
+[[case]]
+name = "captured run"
+pattern = 'n: 2 digit "x"'
+input = "123x"
+matches = [{ text = "23x", at = 1, captures = { n = "23" } }]
+
+[[case]]
+name = "run inside a captured sequence"
+pattern = 'kv: (1+ wordchar "=") 1+ digit'
+input = "abc=x def=12"
+matches = [{ text = "def=12", captures = { kv = "def=" } }]
+
+[[case]]
+name = "multibyte run"
+pattern = '2 letter "1"'
+input = "äöü1"
+matches = [{ text = "öü1", at = 2 }]
+
+[[case]]
+name = "zero-or-more run"
+pattern = '0+ digit "x"'
+input = "12 34x x"
+matches = ["34x", "x"]
+
+[[case]]
+name = "key value"
+pattern = 'k: 1+ wordchar "=" v: 1+ wordchar'
+input = "abc=1 def ghi=2"
+matches = [{ text = "abc=1", captures = { k = "abc", v = "1" } }, { text = "ghi=2", captures = { k = "ghi", v = "2" } }]
