@@ -242,7 +242,7 @@ impl Search<'_> {
     /// only `print` and `replace` need the text to be UTF-8.
     fn input(&mut self, name: &str, path: Option<&Path>, bytes: &[u8]) -> io::Result<()> {
         if let Some(table) = self.program.table() {
-            return self.table(table, name, bytes);
+            return self.table(table, name, path, bytes);
         }
         if !self.needs_text() {
             return self.search(self.program, name, bytes, Position { byte: 0, line: 1 });
@@ -257,27 +257,42 @@ impl Search<'_> {
         }
     }
 
-    /// A `table` program's input: each header line starts a section of rows,
-    /// searched with the program for that header. A section ends where the
-    /// header comes again, as in concatenated output.
-    fn table(&mut self, table: &Table, name: &str, bytes: &[u8]) -> io::Result<()> {
-        // The line at `at`, without its newline, and where the next one starts.
-        let line = |at: Position| {
-            let end = memchr::memchr(b'\n', &bytes[at.byte..]).map_or(bytes.len(), |i| at.byte + i);
-            let next = Position {
-                byte: (end + 1).min(bytes.len()),
-                line: at.line + 1,
-            };
-            (&bytes[at.byte..end], next)
-        };
-        let mut at = Position { byte: 0, line: 1 };
-        while at.byte < bytes.len() {
-            let (header, rows_start) = line(at);
-            if header.trim_ascii().is_empty() {
-                at = rows_start;
-                continue;
+    /// A `table` program's input: each section's rows are searched, printed
+    /// or replaced with the program for its header.
+    fn table(
+        &mut self,
+        table: &Table,
+        name: &str,
+        path: Option<&Path>,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        // Whether this input matched, to explain it if it didn't.
+        let found_before = std::mem::take(&mut self.found);
+        let sections = match table.sections(bytes) {
+            Ok(sections) => sections,
+            Err(e) => {
+                self.fail(&format!("{name}: {e}"));
+                return Ok(());
             }
-            let rows = match table.for_header(&String::from_utf8_lossy(header)) {
+        };
+        let replacing = self.program.action() == Action::Replace && !self.reports_only();
+        let text = if replacing {
+            match std::str::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(_) => {
+                    eprintln!("sikt: skipping {name}: not valid UTF-8");
+                    return Ok(());
+                }
+            }
+        } else {
+            ""
+        };
+        // With `replace`: the text so far, and where it got to.
+        let mut replaced = String::new();
+        let mut copied = 0;
+        for section in sections {
+            let header = String::from_utf8_lossy(&bytes[section.header.clone()]);
+            let rows = match table.for_header(&header) {
                 Ok(rows) => rows,
                 Err(e) => {
                     report(&e, self.stderr_color);
@@ -285,22 +300,39 @@ impl Search<'_> {
                     return Ok(());
                 }
             };
-            let mut stop = rows_start;
-            while stop.byte < bytes.len() {
-                let (row, next) = line(stop);
-                if row == header {
-                    break;
+            let section_bytes = &bytes[section.rows.clone()];
+            if replacing {
+                let section_text = &text[section.rows.clone()];
+                self.found |= rows.find_iter(section_text).next().is_some();
+                match rows.replace_all(section_text) {
+                    Ok(new) => {
+                        replaced.push_str(&text[copied..section.rows.start]);
+                        replaced.push_str(&new);
+                        copied = section.rows.end;
+                    }
+                    Err(e) => {
+                        self.fail(&format!("{name}: {e}"));
+                        return Ok(());
+                    }
                 }
-                stop = next;
-            }
-            let section = &bytes[rows_start.byte..stop.byte];
-            if rows.action() == Action::Print && !self.reports_only() {
-                self.transform(&rows, name, None, &String::from_utf8_lossy(section))?;
+            } else if rows.action() == Action::Print && !self.reports_only() {
+                self.transform(&rows, name, None, &String::from_utf8_lossy(section_bytes))?;
             } else {
-                self.search(&rows, name, section, rows_start)?;
+                let at = Position {
+                    byte: section.rows.start,
+                    line: section.rows_line,
+                };
+                self.search(&rows, name, section_bytes, at)?;
             }
-            at = stop;
         }
+        if replacing {
+            replaced.push_str(&text[copied..]);
+            self.replace(name, path, text, &replaced)?;
+        }
+        if !self.found && self.args.explain {
+            self.explain(&String::from_utf8_lossy(bytes))?;
+        }
+        self.found |= found_before;
         Ok(())
     }
 
@@ -385,7 +417,7 @@ impl Search<'_> {
             self.matching_lines(name, bytes, &spans, at.line)?;
         }
         self.spans = spans;
-        if count == 0 && args.explain {
+        if count == 0 && args.explain && self.program.table().is_none() {
             self.explain(&String::from_utf8_lossy(bytes))?;
         }
         Ok(())
@@ -425,7 +457,7 @@ impl Search<'_> {
             replaced.push_str(&text[replaced_up_to..]);
             self.replace(name, path, text, &replaced)?;
         }
-        if count == 0 && self.args.explain {
+        if count == 0 && self.args.explain && self.program.table().is_none() {
             self.explain(text)?;
         }
         Ok(())
@@ -544,11 +576,30 @@ impl Search<'_> {
             self.fail("--explain works on one input at a time");
             return Ok(());
         }
-        if self.program.table().is_some() {
-            self.fail("--explain doesn't work with `table` yet");
-            return Ok(());
-        }
-        match self.program.pattern().explain(text) {
+        // A table explains with the program for its first header.
+        let rows = match self.program.table() {
+            None => None,
+            Some(table) => {
+                let first = table
+                    .sections(text.as_bytes())
+                    .ok()
+                    .and_then(|s| s.into_iter().next());
+                let Some(section) = first else {
+                    self.fail("no header to explain the rows by");
+                    return Ok(());
+                };
+                match table.for_header(&text[section.header]) {
+                    Ok(rows) => Some(rows),
+                    Err(e) => {
+                        report(&e, self.stderr_color);
+                        self.failed = true;
+                        return Ok(());
+                    }
+                }
+            }
+        };
+        let pattern = rows.as_ref().unwrap_or(self.program).pattern();
+        match pattern.explain(text) {
             Ok(Some(e)) => eprintln!("{e}"),
             Ok(None) => eprintln!("the pattern matches, but `where` rejected every match"),
             Err(e) => self.fail(&e.to_string()),

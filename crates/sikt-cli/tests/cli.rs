@@ -570,3 +570,35 @@ fn use_reads_files_from_the_working_directory() {
         .success()
         .stdout("[WARN]\n");
 }
+
+#[test]
+fn table_header_pattern() {
+    sikt()
+        .args(["--rows", r#"table header ("PID") types pid integer"#])
+        .write_stdin("booting\n  PID CMD\n  1 init\n")
+        .assert()
+        .success()
+        .stdout("{\"pid\":1,\"cmd\":\"init\"}\n");
+}
+
+#[test]
+fn table_replace_keeps_the_header() {
+    sikt()
+        .arg(r#"table replace "{cmd}:{pid}""#)
+        .write_stdin("PID CMD\n1 init\n2 sh\n")
+        .assert()
+        .success()
+        .stdout("PID CMD\ninit:1\nsh:2\n");
+}
+
+#[test]
+fn table_explain() {
+    sikt()
+        .args(["--explain", "table types a integer where a > 5"])
+        .write_stdin("A B\n1 2\n")
+        .assert()
+        .code(1)
+        .stderr(contains(
+            "the pattern matches, but `where` rejected every match",
+        ));
+}

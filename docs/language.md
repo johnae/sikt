@@ -290,12 +290,21 @@ These statements go with `table`:
 | --- | --- |
 | `split by (2+ space)` | splits columns at a pattern instead of whitespace |
 | `columns (fs size mount)` | names the columns when the header can't be split cleanly |
+| `header ("PID")` | treats lines the pattern matches as headers, skipping lines before the first |
 | `types pid integer cpu number` | gives columns a type |
 | `with time: m: integer ":" s: integer` | runs a pattern on a column and adds its captures |
 
 The last column takes the rest of its line, spaces included. A row with fewer columns
-keeps the ones it has. A line equal to the header starts the table again, and `where`
-and `print` work as in any program.
+keeps the ones it has. A line equal to the header starts the table again. `where`,
+`print` and `replace` work as in any program; `replace` rewrites the rows and leaves
+the headers alone:
+
+```sh
+$ printf 'PID CMD\n1 init\n2 sh\n' | sikt 'table replace "{cmd}:{pid}"'
+PID CMD
+init:1
+sh:2
+```
 
 ## Lines
 

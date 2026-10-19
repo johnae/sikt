@@ -3,9 +3,10 @@
 
 use std::collections::HashMap;
 use std::fmt;
+use std::ops::Range;
 
 use crate::class::{CharSet, Kind};
-use crate::error::Error;
+use crate::error::{Error, MatchError};
 use crate::pattern::{Pattern, PatternBuilder};
 use crate::program::Program;
 use crate::syntax::{Anchor, Ast, Expr, ExprKind, Statements, TableSpec};
@@ -19,6 +20,19 @@ pub struct Table {
     rules: Vec<Expr>,
     source: String,
     builder: PatternBuilder,
+    /// `header (pattern)`, compiled.
+    header: Option<Pattern>,
+}
+
+/// A header line and the rows under it, as byte ranges of the text: the rows
+/// run up to the next header or the end.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Section {
+    /// The header line, without its line break.
+    pub header: Range<usize>,
+    pub rows: Range<usize>,
+    /// The 1-based line the rows start on.
+    pub rows_line: usize,
 }
 
 impl fmt::Debug for Table {
@@ -34,14 +48,66 @@ impl Table {
         ast: &Ast,
         source: &str,
         builder: &PatternBuilder,
-    ) -> Self {
-        Table {
+    ) -> Result<Self, Error> {
+        let builder = builder.clone().line_mode(true);
+        let header = match &spec.header {
+            Some(header) => {
+                let ast = Ast {
+                    main: header.clone(),
+                    rules: ast.rules.clone(),
+                    unused_rules: Vec::new(),
+                    statements: Statements::default(),
+                };
+                Some(builder.compile_ast(ast, source, Vec::new())?.0)
+            }
+            None => None,
+        };
+        Ok(Table {
             spec,
             statements,
             rules: ast.rules.clone(),
             source: source.to_owned(),
-            builder: builder.clone().line_mode(true),
+            builder,
+            header,
+        })
+    }
+
+    /// The sections of `text`: each header line and the rows under it. A
+    /// header is a line `header (pattern)` matches, or without it the first
+    /// line with text and any line equal to it, as in concatenated output.
+    /// Lines before the first header aren't in any section.
+    pub fn sections(&self, text: &[u8]) -> Result<Vec<Section>, MatchError> {
+        let mut sections = Vec::new();
+        let mut current: Option<Section> = None;
+        let mut start = 0;
+        let mut line = 1;
+        while start < text.len() {
+            let next = memchr::memchr(b'\n', &text[start..]).map_or(text.len(), |i| start + i + 1);
+            let raw = &text[start..next];
+            let content = raw.strip_suffix(b"\n").unwrap_or(raw);
+            let content = content.strip_suffix(b"\r").unwrap_or(content);
+            let is_header = match (&self.header, &current) {
+                (Some(pattern), _) => pattern.is_match_bytes(content)?,
+                (None, None) => !content.trim_ascii().is_empty(),
+                (None, Some(section)) => text[section.header.clone()] == *content,
+            };
+            if is_header {
+                if let Some(mut section) = current.take() {
+                    section.rows.end = start;
+                    sections.push(section);
+                }
+                let header = start..start + content.len();
+                current = Some(Section {
+                    header,
+                    rows: next..text.len(),
+                    rows_line: line + 1,
+                });
+            }
+            start = next;
+            line += 1;
         }
+        sections.extend(current);
+        Ok(sections)
     }
 
     /// The program for the rows under `header`: it matches a whole line and

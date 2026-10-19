@@ -168,11 +168,53 @@ fn table_and_find_dont_mix() {
     assert_eq!(error.message(), "a table program has no `find`");
 }
 
+/// `(header, rows, first row line)` for each section of `text`.
+fn sections(source: &str, text: &str) -> Vec<(String, String, usize)> {
+    let program = Program::new(source).unwrap();
+    let table = program.table().unwrap();
+    table
+        .sections(text.as_bytes())
+        .unwrap()
+        .into_iter()
+        .map(|s| {
+            (
+                text[s.header].to_owned(),
+                text[s.rows].to_owned(),
+                s.rows_line,
+            )
+        })
+        .collect()
+}
+
 #[test]
-fn replace_isnt_supported_in_tables_yet() {
-    let error = Program::new(r#"table replace "x""#).unwrap_err();
+fn a_repeated_header_starts_a_section() {
     assert_eq!(
-        error.message(),
-        "`replace` doesn't work in a table program yet"
+        sections("table", "\nA B\n1 2\n\nA B\n3 4\n"),
+        [
+            ("A B".into(), "1 2\n\n".into(), 3),
+            ("A B".into(), "3 4\n".into(), 6)
+        ]
+    );
+}
+
+#[test]
+fn a_header_pattern_finds_headers_anywhere() {
+    let text = "booting\n  PID CMD\n  1 init\nlater\n  PID CMD\n  7 sh\n";
+    assert_eq!(
+        sections(r#"table header ("PID")"#, text),
+        [
+            ("  PID CMD".into(), "  1 init\nlater\n".into(), 3),
+            ("  PID CMD".into(), "  7 sh\n".into(), 6)
+        ]
+    );
+}
+
+#[test]
+fn replace_in_a_table() {
+    let program = Program::new(r#"table replace "{cmd}:{pid}""#).unwrap();
+    let rows = program.table().unwrap().for_header("PID CMD").unwrap();
+    assert_eq!(
+        rows.replace_all("1 init\n2 sh -c x\n").unwrap(),
+        "init:1\nsh -c x:2\n"
     );
 }

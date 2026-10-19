@@ -77,13 +77,14 @@ impl Program {
             // columns; see [`Table::for_header`].
             let action = match &statements.output {
                 Some((_, output)) if output.print => Action::Print,
-                _ => Action::Find,
+                Some(_) => Action::Replace,
+                None => Action::Find,
             };
             let statements = Statements {
                 table: None,
                 ..statements
             };
-            let table = Table::new(spec, statements, ast, source, builder);
+            let table = Table::new(spec, statements, ast, source, builder)?;
             return Ok(Program {
                 pattern,
                 filter: None,

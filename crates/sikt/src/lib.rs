@@ -33,7 +33,7 @@ pub use explain::Explanation;
 pub use haystack::Haystack;
 pub use pattern::{FindIter, Match, Pattern, PatternBuilder};
 pub use program::{Action, Program};
-pub use table::Table;
+pub use table::{Section, Table};
 pub use template::Template;
 pub use value::{CaptureType, Value};
 

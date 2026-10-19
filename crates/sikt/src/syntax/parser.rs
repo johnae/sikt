@@ -172,15 +172,6 @@ pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
                 .error("a table program has no `find`", main.span, None)
                 .with_help("the header says what each row holds"));
         }
-        if let Some((keyword, output)) = &statements.output
-            && !output.print
-        {
-            return Err(p.error(
-                "`replace` doesn't work in a table program yet",
-                *keyword,
-                None,
-            ));
-        }
         table.with = with;
         table.types = types;
         // Rows come from the header, so the pattern itself matches nothing.
@@ -425,9 +416,14 @@ impl Parser<'_> {
             columns: None,
             types: Vec::new(),
             with: Vec::new(),
+            header: None,
         };
         loop {
-            if self.is_word("split") {
+            if self.is_word("header") {
+                let header = self.bump().span;
+                table.header =
+                    Some(self.operand("expected a pattern after `header`".into(), header)?);
+            } else if self.is_word("split") {
                 let split = self.bump().span;
                 if !self.is_word("by") {
                     return Err(self.error("expected `by` after `split`", split, None));

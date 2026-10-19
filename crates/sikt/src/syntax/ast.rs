@@ -427,6 +427,9 @@ pub(crate) struct TableSpec {
     pub types: Vec<(String, Span, CaptureType)>,
     /// `with`: a column, where it's named, and the pattern to run on it.
     pub with: Vec<(String, Span, Expr)>,
+    /// `header (pattern)`: which lines are headers. Without it, the first
+    /// line with text and lines equal to it.
+    pub header: Option<Expr>,
 }
 
 impl TableSpec {
@@ -437,6 +440,7 @@ impl TableSpec {
     ) -> Result<TableSpec, E> {
         Ok(TableSpec {
             split: self.split.map(&mut *f).transpose()?,
+            header: self.header.map(&mut *f).transpose()?,
             with: self
                 .with
                 .into_iter()
