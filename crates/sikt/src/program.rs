@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use crate::compile::{self, compile};
 use crate::error::{Error, MatchError, Warning};
+use crate::haystack::Haystack;
 use crate::pattern::{Match, Pattern, splice};
 use crate::syntax::{
     Anchor, Ast, CmpOp, Cond, Expr, ExprKind, Span, Statements, Test, suggest_from,
@@ -112,7 +113,23 @@ impl Program {
         &'a self,
         text: &'a str,
     ) -> impl Iterator<Item = Result<Match<'a>, MatchError>> + 'a {
-        self.pattern.find_iter(text).filter_map(move |m| {
+        self.search(text)
+    }
+
+    /// Like [`find_iter`](Self::find_iter), on bytes that may not be valid
+    /// UTF-8.
+    pub fn find_iter_bytes<'a>(
+        &'a self,
+        text: &'a [u8],
+    ) -> impl Iterator<Item = Result<Match<'a, [u8]>, MatchError>> + 'a {
+        self.search(text)
+    }
+
+    fn search<'a, H: Haystack + ?Sized>(
+        &'a self,
+        text: &'a H,
+    ) -> impl Iterator<Item = Result<Match<'a, H>, MatchError>> + 'a {
+        self.pattern.search(text).filter_map(move |m| {
             m.and_then(|m| Ok(self.accepts(&m)?.then_some(m)))
                 .transpose()
         })
@@ -135,14 +152,18 @@ impl Program {
         }
     }
 
-    fn accepts(&self, m: &Match) -> Result<bool, MatchError> {
+    fn accepts<H: Haystack + ?Sized>(&self, m: &Match<'_, H>) -> Result<bool, MatchError> {
         match &self.filter {
             Some(filter) => self.eval(filter, m),
             None => Ok(true),
         }
     }
 
-    fn eval(&self, filter: &Filter, m: &Match) -> Result<bool, MatchError> {
+    fn eval<H: Haystack + ?Sized>(
+        &self,
+        filter: &Filter,
+        m: &Match<'_, H>,
+    ) -> Result<bool, MatchError> {
         Ok(match filter {
             Filter::And(a, b) => self.eval(a, m)? && self.eval(b, m)?,
             Filter::Or(a, b) => self.eval(a, m)? || self.eval(b, m)?,
@@ -150,34 +171,32 @@ impl Program {
             Filter::Test { capture, test } => {
                 // A capture that didn't participate tests as empty text.
                 let text = match capture {
-                    Some(name) => m.get(name).unwrap_or(""),
-                    None => m.as_str(),
+                    Some(name) => m.get(name).map_or(&[][..], Haystack::bytes),
+                    None => m.text().bytes(),
                 };
-                let folded = || {
+                let folded = || -> Cow<'_, [u8]> {
                     if self.case_insensitive {
-                        Cow::Owned(text.to_lowercase())
+                        Cow::Owned(String::from_utf8_lossy(text).to_lowercase().into_bytes())
                     } else {
                         Cow::Borrowed(text)
                     }
                 };
                 match test {
-                    CheckedTest::Is(s) => folded() == s.as_str(),
+                    CheckedTest::Is(s) => *folded() == *s.as_bytes(),
                     CheckedTest::In(list) => {
                         let folded = folded();
-                        list.iter().any(|s| *s == folded)
+                        list.iter().any(|s| *s.as_bytes() == *folded)
                     }
-                    CheckedTest::Compare(op, n) => text.parse().is_ok_and(|v: f64| op.holds(v, *n)),
-                    CheckedTest::Contains(s) => folded().contains(s.as_str()),
+                    CheckedTest::Compare(op, n) => std::str::from_utf8(text)
+                        .ok()
+                        .and_then(|t| t.parse().ok())
+                        .is_some_and(|v: f64| op.holds(v, *n)),
+                    CheckedTest::Contains(s) => {
+                        memchr::memmem::find(&folded(), s.as_bytes()).is_some()
+                    }
                     CheckedTest::Matches(program) => {
                         let mut scratch = Scratch::new(program);
-                        vm::exec(
-                            program,
-                            text.as_bytes(),
-                            0,
-                            &mut scratch,
-                            self.pattern.limits(),
-                        )?
-                        .is_some()
+                        vm::exec(program, text, 0, &mut scratch, self.pattern.limits())?.is_some()
                     }
                 }
             }

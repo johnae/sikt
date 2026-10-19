@@ -370,3 +370,39 @@ fn line_numbers_skip_lines_without_matches() {
         .success()
         .stdout("2:x\n5:xx\n");
 }
+
+#[test]
+fn searches_bytes_that_are_not_utf8() {
+    sikt()
+        .arg(r#""TODO""#)
+        .write_stdin(&b"ok \xff TODO\nnope\n"[..])
+        .assert()
+        .success()
+        .stdout(&b"ok \xff TODO\n"[..]);
+}
+
+#[test]
+fn json_replaces_invalid_utf8() {
+    sikt()
+        .args(["--json", r#"w: (any "x")"#])
+        .write_stdin(&b"\xffx\n"[..])
+        .assert()
+        .success()
+        .stdout(contains("\"text\":\"\u{fffd}x\""));
+}
+
+#[test]
+fn replace_skips_files_that_are_not_utf8() {
+    let dir = tree();
+    fs::write(dir.path().join("latin1.txt"), b"caf\xe9 hello\n").unwrap();
+    sikt()
+        .current_dir(dir.path())
+        .args(["-w", r#"find "hello" replace "bye""#, "latin1.txt"])
+        .assert()
+        .code(1)
+        .stderr(contains("skipping latin1.txt: not valid UTF-8"));
+    assert_eq!(
+        fs::read(dir.path().join("latin1.txt")).unwrap(),
+        b"caf\xe9 hello\n"
+    );
+}

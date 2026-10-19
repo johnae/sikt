@@ -31,24 +31,30 @@ impl Style {
         self.paint(out, "32", n)
     }
 
-    pub fn matched(self, out: &mut impl Write, text: &str) -> io::Result<()> {
-        self.paint(out, "1;31", text)
+    pub fn matched(self, out: &mut impl Write, text: &[u8]) -> io::Result<()> {
+        if self.color {
+            out.write_all(b"\x1b[1;31m")?;
+            out.write_all(text)?;
+            out.write_all(b"\x1b[0m")
+        } else {
+            out.write_all(text)
+        }
     }
 
     /// `line` with the byte `ranges` highlighted.
     pub fn highlight(
         self,
         out: &mut impl Write,
-        line: &str,
+        line: &[u8],
         ranges: impl Iterator<Item = Range<usize>>,
     ) -> io::Result<()> {
         let mut last = 0;
         for r in ranges {
-            out.write_all(&line.as_bytes()[last..r.start])?;
+            out.write_all(&line[last..r.start])?;
             self.matched(out, &line[r.start..r.end])?;
             last = r.end;
         }
-        out.write_all(&line.as_bytes()[last..])
+        out.write_all(&line[last..])
     }
 
     /// A unified diff between two versions of the file at `path`.

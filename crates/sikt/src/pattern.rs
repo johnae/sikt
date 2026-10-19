@@ -6,6 +6,7 @@ use crate::class::char_len;
 use crate::compile::{Code, compile};
 use crate::error::{Error, MatchError, Warning};
 use crate::explain::Explanation;
+use crate::haystack::Haystack;
 use crate::lint::lint;
 use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::program::Program;
@@ -157,9 +158,19 @@ impl Pattern {
         Ok(self.find(text)?.is_some())
     }
 
+    /// Like [`is_match`](Self::is_match), on bytes.
+    pub fn is_match_bytes(&self, text: &[u8]) -> Result<bool, MatchError> {
+        Ok(self.find_bytes(text)?.is_some())
+    }
+
     /// The first match, scanning left to right.
     pub fn find<'a>(&'a self, text: &'a str) -> Result<Option<Match<'a>>, MatchError> {
         self.find_iter(text).next().transpose()
+    }
+
+    /// Like [`find`](Self::find), on bytes.
+    pub fn find_bytes<'a>(&'a self, text: &'a [u8]) -> Result<Option<Match<'a, [u8]>>, MatchError> {
+        self.find_iter_bytes(text).next().transpose()
     }
 
     /// The text with every match replaced by `template`.
@@ -269,11 +280,23 @@ impl Pattern {
     /// All non-overlapping matches, left to right. After an empty match the
     /// scan moves on one character. Stops after the first error.
     pub fn find_iter<'a>(&'a self, text: &'a str) -> FindIter<'a> {
+        self.search(text)
+    }
+
+    /// Like [`find_iter`](Self::find_iter), on bytes that may not be valid
+    /// UTF-8. Invalid bytes match only `any`.
+    pub fn find_iter_bytes<'a>(&'a self, text: &'a [u8]) -> FindIter<'a, [u8]> {
+        self.search(text)
+    }
+
+    pub(crate) fn search<'a, H: Haystack + ?Sized>(&'a self, text: &'a H) -> FindIter<'a, H> {
+        let bytes = text.bytes();
         FindIter {
             pattern: self,
             text,
+            bytes,
             pos: 0,
-            window: (!self.line_mode).then_some(0..text.len()),
+            window: (!self.line_mode).then_some(0..bytes.len()),
             next_line: 0,
             scratch: Scratch::new(&self.program),
             done: false,
@@ -306,9 +329,10 @@ pub(crate) fn splice<'a, 'm>(
 
 /// Iterator over the matches in a text. See [`Pattern::find_iter`].
 #[derive(Debug)]
-pub struct FindIter<'a> {
+pub struct FindIter<'a, H: Haystack + ?Sized = str> {
     pattern: &'a Pattern,
-    text: &'a str,
+    text: &'a H,
+    bytes: &'a [u8],
     pos: usize,
     /// The part of the text being searched: all of it, or in line mode the
     /// current line without its line break. `None` between lines.
@@ -319,8 +343,8 @@ pub struct FindIter<'a> {
     done: bool,
 }
 
-impl<'a> Iterator for FindIter<'a> {
-    type Item = Result<Match<'a>, MatchError>;
+impl<'a, H: Haystack + ?Sized> Iterator for FindIter<'a, H> {
+    type Item = Result<Match<'a, H>, MatchError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while !self.done {
@@ -337,12 +361,12 @@ impl<'a> Iterator for FindIter<'a> {
     }
 }
 
-impl<'a> FindIter<'a> {
+impl<'a, H: Haystack + ?Sized> FindIter<'a, H> {
     /// The next match in the window, or `None` once it has no more.
-    fn search_window(&mut self) -> Option<Result<Match<'a>, MatchError>> {
+    fn search_window(&mut self) -> Option<Result<Match<'a, H>, MatchError>> {
         let window = self.window.clone().expect("searching a window");
         let base = window.start;
-        let hay = &self.text.as_bytes()[window];
+        let hay = &self.bytes[window];
         let program = &self.pattern.program;
         while let Some(candidate) = self.pattern.prefilter.find(hay, self.pos - base) {
             let plan = self
@@ -388,7 +412,7 @@ impl<'a> FindIter<'a> {
     /// Moves the window to the next line where a match could start, using the
     /// prefilter over the rest of the text to skip lines. `false` at the end.
     fn enter_next_line(&mut self) -> bool {
-        let bytes = self.text.as_bytes();
+        let bytes = self.bytes;
         let mut pos = self.next_line;
         // A line break at the very end doesn't start another line.
         while pos < bytes.len() {
@@ -419,19 +443,30 @@ impl<'a> FindIter<'a> {
     }
 }
 
-/// One match, with its named captures.
-#[derive(Clone)]
-pub struct Match<'a> {
+/// One match, with its named captures. `H` is what was searched: `str`, or
+/// `[u8]`, in which case the match and captures are bytes.
+pub struct Match<'a, H: Haystack + ?Sized = str> {
     pattern: &'a Pattern,
-    text: &'a str,
+    text: &'a H,
     range: Range<usize>,
     captures: Captures,
 }
 
-impl fmt::Debug for Match<'_> {
+impl<H: Haystack + ?Sized> Clone for Match<'_, H> {
+    fn clone(&self) -> Self {
+        Match {
+            pattern: self.pattern,
+            text: self.text,
+            range: self.range.clone(),
+            captures: self.captures.clone(),
+        }
+    }
+}
+
+impl<H: Haystack + ?Sized> fmt::Debug for Match<'_, H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d = f.debug_struct("Match");
-        d.field("text", &self.as_str()).field("range", &self.range);
+        d.field("text", &self.text()).field("range", &self.range);
         for name in self.pattern.capture_names() {
             d.field(name, &self.get(name));
         }
@@ -439,9 +474,22 @@ impl fmt::Debug for Match<'_> {
     }
 }
 
-impl<'a> Match<'a> {
+impl<'a> Match<'a, str> {
     pub fn as_str(&self) -> &'a str {
-        &self.text[self.range.clone()]
+        self.text()
+    }
+}
+
+impl<'a> Match<'a, [u8]> {
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.text()
+    }
+}
+
+impl<'a, H: Haystack + ?Sized> Match<'a, H> {
+    /// The matched text, as a `str` or bytes like the text searched.
+    pub fn text(&self) -> &'a H {
+        self.text.part(self.range.clone())
     }
 
     /// Byte offsets of the match.
@@ -458,8 +506,8 @@ impl<'a> Match<'a> {
     }
 
     /// The last text captured under `name`, or `None` if it didn't participate.
-    pub fn get(&self, name: &str) -> Option<&'a str> {
-        self.span(name).map(|r| &self.text[r])
+    pub fn get(&self, name: &str) -> Option<&'a H> {
+        self.span(name).map(|r| self.text.part(r))
     }
 
     /// Byte offsets of the last text captured under `name`.
@@ -474,13 +522,13 @@ impl<'a> Match<'a> {
 
     /// Every text captured under `name`, in order. Captures inside a
     /// repetition record each occurrence.
-    pub fn all(&self, name: &str) -> impl Iterator<Item = &'a str> {
+    pub fn all(&self, name: &str) -> impl Iterator<Item = &'a H> {
         let slot = self.slot(name);
         let text = self.text;
         self.captures
             .iter()
             .filter(move |(s, _)| Some(*s) == slot)
-            .map(move |(_, r)| &text[r.clone()])
+            .map(move |(_, r)| text.part(r.clone()))
     }
 
     fn slot(&self, name: &str) -> Option<u32> {
@@ -588,6 +636,25 @@ mod tests {
                 start += chunk.len();
             }
             prop_assert_eq!(found, expected, "pattern `{}`", src);
+        }
+
+        #[test]
+        fn bytes_and_str_agree(src in pattern(), input in "[ab12x\\- é\n]{0,24}", line_mode: bool) {
+            let Ok(p) = Pattern::builder().line_mode(line_mode).build(&src) else { return Ok(()) };
+            let text: Vec<_> = p.find_iter(&input).map(|m| m.unwrap().range()).collect();
+            let bytes: Vec<_> = p.find_iter_bytes(input.as_bytes()).map(|m| m.unwrap().range()).collect();
+            prop_assert_eq!(text, bytes, "pattern `{}`", src);
+        }
+
+        #[test]
+        fn any_bytes_are_safe(src in pattern(), input in prop::collection::vec(any::<u8>(), 0..40), line_mode: bool) {
+            let Ok(p) = Pattern::builder().line_mode(line_mode).build(&src) else { return Ok(()) };
+            let mut last = 0;
+            for m in p.find_iter_bytes(&input) {
+                let m = m.unwrap();
+                prop_assert!(last <= m.start() && m.end() <= input.len());
+                last = m.end();
+            }
         }
 
         #[test]

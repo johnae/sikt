@@ -156,9 +156,9 @@ fn run(args: &Args) -> io::Result<ExitCode> {
         spans: Vec::new(),
     };
     if paths.is_empty() {
-        let mut text = String::new();
-        io::stdin().read_to_string(&mut text)?;
-        search.text("<stdin>", None, &text)?;
+        let mut bytes = Vec::new();
+        io::stdin().read_to_end(&mut bytes)?;
+        search.input("<stdin>", None, &bytes)?;
     }
     for path in &paths {
         if path.is_dir() {
@@ -208,9 +208,9 @@ impl Search<'_> {
 
     fn file(&mut self, path: &Path, walked: bool) -> io::Result<()> {
         let name = path.strip_prefix(".").unwrap_or(path).display().to_string();
-        // A file that may be rewritten is read, never mapped.
-        let replacing = self.program.action() == Action::Replace;
-        let bytes = match Contents::load(path, !replacing) {
+        // Only a file that is searched as bytes is mapped. One that becomes a
+        // `str` or may be rewritten is read.
+        let bytes = match Contents::load(path, !self.needs_text()) {
             Ok(bytes) => bytes,
             Err(e) => {
                 self.fail(&format!("{name}: {e}"));
@@ -220,21 +220,38 @@ impl Search<'_> {
         if walked && bytes[..bytes.len().min(8192)].contains(&0) {
             return Ok(());
         }
-        match std::str::from_utf8(&bytes) {
-            Ok(text) => self.text(&name, Some(path), text),
-            Err(_) if replacing => {
+        self.input(&name, Some(path), &bytes)
+    }
+
+    /// One input: stdin or a file's contents. Searching works on the bytes;
+    /// only `print` and `replace` need the text to be UTF-8.
+    fn input(&mut self, name: &str, path: Option<&Path>, bytes: &[u8]) -> io::Result<()> {
+        if !self.needs_text() {
+            return self.search(name, bytes);
+        }
+        match std::str::from_utf8(bytes) {
+            Ok(text) => self.transform(name, path, text),
+            Err(_) if self.program.action() == Action::Replace => {
                 eprintln!("sikt: skipping {name}: not valid UTF-8");
                 Ok(())
             }
-            Err(_) => self.text(&name, Some(path), &String::from_utf8_lossy(&bytes)),
+            Err(_) => self.transform(name, path, &String::from_utf8_lossy(bytes)),
         }
     }
 
-    /// Searches one text: stdin or a file's contents. Matches stream to the
-    /// output as they're found.
-    fn text(&mut self, name: &str, path: Option<&Path>, text: &str) -> io::Result<()> {
+    /// Whether the input must be UTF-8 text: for `print` and `replace`, unless
+    /// the output is only counts, names or JSON.
+    fn needs_text(&self) -> bool {
+        let args = self.args;
+        self.program.action() != Action::Find
+            && !(args.files_with_matches || args.count || args.json)
+    }
+
+    /// Finds the matches in `bytes` and reports them: matching lines, only
+    /// the matches, counts, file names or JSON. Matches stream to the output
+    /// as they're found.
+    fn search(&mut self, name: &str, bytes: &[u8]) -> io::Result<()> {
         let (args, program) = (self.args, self.program);
-        let bytes = text.as_bytes();
         let numbered = args.json || args.only_matching;
         let mut count = 0;
         // Line numbers count on from the previous match.
@@ -242,9 +259,7 @@ impl Search<'_> {
         // Reused from file to file.
         let mut spans = std::mem::take(&mut self.spans);
         spans.clear();
-        let mut replaced = String::new();
-        let mut replaced_up_to = 0;
-        for m in program.find_iter(text) {
+        for m in program.find_iter_bytes(bytes) {
             let m = match m {
                 Ok(m) => m,
                 Err(e) => {
@@ -265,21 +280,12 @@ impl Search<'_> {
             }
             if args.json {
                 self.json(name, line, &m)?;
-                continue;
-            }
-            match program.action() {
-                Action::Print => writeln!(self.out, "{}", program.render(&m).unwrap_or_default())?,
-                Action::Replace => {
-                    replaced.push_str(&text[replaced_up_to..m.start()]);
-                    replaced.push_str(&program.render(&m).unwrap_or_default());
-                    replaced_up_to = m.end();
-                }
-                Action::Find if args.only_matching => {
-                    self.lead(name, line)?;
-                    self.style.matched(&mut self.out, m.as_str())?;
-                    writeln!(self.out)?;
-                }
-                Action::Find => spans.push((m.start(), m.end())),
+            } else if args.only_matching {
+                self.lead(name, line)?;
+                self.style.matched(&mut self.out, m.as_bytes())?;
+                writeln!(self.out)?;
+            } else {
+                spans.push((m.start(), m.end()));
             }
         }
         self.found |= count > 0;
@@ -297,19 +303,46 @@ impl Search<'_> {
             if !self.prefix || count > 0 {
                 writeln!(self.out, "{count}")?;
             }
-        } else if !args.json {
-            match program.action() {
-                Action::Replace => {
-                    replaced.push_str(&text[replaced_up_to..]);
-                    self.replace(name, path, text, &replaced)?;
-                }
-                Action::Find if !args.only_matching => self.matching_lines(name, text, &spans)?,
-                Action::Find | Action::Print => {}
-            }
+        } else if !args.json && !args.only_matching {
+            self.matching_lines(name, bytes, &spans)?;
         }
-
         self.spans = spans;
         if count == 0 && args.explain {
+            self.explain(&String::from_utf8_lossy(bytes))?;
+        }
+        Ok(())
+    }
+
+    /// Runs `print` or `replace` over `text`.
+    fn transform(&mut self, name: &str, path: Option<&Path>, text: &str) -> io::Result<()> {
+        let program = self.program;
+        let mut count = 0;
+        let mut replaced = String::new();
+        let mut replaced_up_to = 0;
+        for m in program.find_iter(text) {
+            let m = match m {
+                Ok(m) => m,
+                Err(e) => {
+                    self.fail(&format!("{name}: {e}"));
+                    return Ok(());
+                }
+            };
+            count += 1;
+            let output = program.render(&m).unwrap_or_default();
+            if program.action() == Action::Print {
+                writeln!(self.out, "{output}")?;
+            } else {
+                replaced.push_str(&text[replaced_up_to..m.start()]);
+                replaced.push_str(&output);
+                replaced_up_to = m.end();
+            }
+        }
+        self.found |= count > 0;
+        if program.action() == Action::Replace {
+            replaced.push_str(&text[replaced_up_to..]);
+            self.replace(name, path, text, &replaced)?;
+        }
+        if count == 0 && self.args.explain {
             self.explain(text)?;
         }
         Ok(())
@@ -334,10 +367,9 @@ impl Search<'_> {
     fn matching_lines(
         &mut self,
         name: &str,
-        text: &str,
+        bytes: &[u8],
         spans: &[(usize, usize)],
     ) -> io::Result<()> {
-        let bytes = text.as_bytes();
         let (mut counted, mut number) = (0, 1);
         let mut first = 0;
         let mut line_start = 0;
@@ -363,7 +395,7 @@ impl Search<'_> {
                     });
                 self.lead(name, number)?;
                 self.style
-                    .highlight(&mut self.out, &text[line_start..end], hits)?;
+                    .highlight(&mut self.out, &bytes[line_start..end], hits)?;
                 writeln!(self.out)?;
             }
             // Matches that end on this line are done; one that runs on
@@ -382,7 +414,9 @@ impl Search<'_> {
         Ok(())
     }
 
-    fn json(&mut self, name: &str, line: usize, m: &Match) -> io::Result<()> {
+    /// Text that isn't valid UTF-8 gets replacement characters, since JSON
+    /// strings must be Unicode.
+    fn json(&mut self, name: &str, line: usize, m: &Match<[u8]>) -> io::Result<()> {
         let captures: serde_json::Map<String, serde_json::Value> = self
             .program
             .pattern()
@@ -390,7 +424,9 @@ impl Search<'_> {
             .map(|n| {
                 (
                     n.to_owned(),
-                    m.get(n).map_or(serde_json::Value::Null, Into::into),
+                    m.get(n).map_or(serde_json::Value::Null, |c| {
+                        String::from_utf8_lossy(c).into()
+                    }),
                 )
             })
             .collect();
@@ -399,7 +435,7 @@ impl Search<'_> {
             "line": line,
             "start": m.start(),
             "end": m.end(),
-            "text": m.as_str(),
+            "text": String::from_utf8_lossy(m.as_bytes()),
             "captures": captures,
         });
         writeln!(self.out, "{record}")
@@ -458,9 +494,9 @@ impl Contents {
     fn load(path: &Path, map: bool) -> io::Result<Contents> {
         let mut file = fs::File::open(path)?;
         if map && file.metadata()?.len() >= MAP_AT {
-            // SAFETY: the map is only read. If another process changes the
-            // file during the search, the search can see a mix of old and new
-            // text, the same as ripgrep's mapped reads.
+            // SAFETY: the map is only read, and only searched as bytes, never
+            // as `str`. If another process changes the file meanwhile, the
+            // search can see a mix of old and new bytes, as with ripgrep.
             return Ok(Contents::Mapped(unsafe { memmap2::Mmap::map(&file)? }));
         }
         let mut bytes = Vec::new();
