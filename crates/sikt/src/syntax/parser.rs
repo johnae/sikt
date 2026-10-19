@@ -4,17 +4,34 @@ use crate::class::{CharSet, Kind};
 use crate::error::Error;
 
 /// Words held back for features planned after v1.
-const RESERVED: &[&str] = &[
+pub(super) const RESERVED: &[&str] = &[
     "at", "grammar", "infix", "recover", "skip", "use", "longest",
 ];
 
-/// Words in the v1 language that the parser doesn't handle yet.
-const UNSUPPORTED: &[&str] = &["let"];
-
 /// Words that can start a pattern; used for "did you mean" suggestions.
-const VOCABULARY: &[&str] = &["any", "newline", "optional", "until", "through", "nocase"];
+pub(super) const VOCABULARY: &[&str] =
+    &["any", "newline", "optional", "until", "through", "nocase"];
 
-pub(crate) fn parse(src: &str) -> Result<Expr, Error> {
+/// Words with a meaning of their own, which can't name a rule.
+const KEYWORDS: &[&str] = &[
+    "or", "one", "none", "of", "followed", "by", "not", "after", "line", "text", "word", "start",
+    "end", "let", "find", "match",
+];
+
+/// A `let` rule as written, before its references are resolved.
+pub(crate) struct Rule {
+    pub name: String,
+    pub span: Span,
+    pub body: Expr,
+}
+
+/// A pattern as written: the expression to find and the `let` rules.
+pub(crate) struct Parsed {
+    pub main: Expr,
+    pub rules: Vec<Rule>,
+}
+
+pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
     let tokens = lex(src)?;
     let mut p = Parser {
         src,
@@ -24,11 +41,45 @@ pub(crate) fn parse(src: &str) -> Result<Expr, Error> {
     if p.peek() == &Tok::Eof {
         return Err(p.error("empty pattern", p.span(), Some("nothing to match".into())));
     }
-    let expr = p.expr()?;
+    let mut main = if p.at_statement() {
+        None
+    } else {
+        Some(p.expr()?)
+    };
+    let mut rules = Vec::new();
+    loop {
+        if p.is_word("let") {
+            rules.push(p.rule()?);
+        } else if p.is_word("find") {
+            let find = p.bump();
+            if main.is_some() {
+                return Err(p
+                    .error("the pattern to find is given twice", find.span, None)
+                    .with_help("a pattern has one part to find; put the rest in `let` rules"));
+            }
+            if p.at_seq_end() {
+                return Err(p.error("expected a pattern after `find`", find.span, None));
+            }
+            main = Some(p.expr()?);
+        } else {
+            break;
+        }
+    }
     match p.peek() {
-        Tok::Eof => Ok(expr),
-        Tok::RParen => Err(p.error("unmatched `)`", p.span(), Some("no `(` before this".into()))),
-        tok => Err(p.error(format!("unexpected {}", tok.describe()), p.span(), None)),
+        Tok::Eof => {}
+        Tok::RParen => {
+            return Err(p.error("unmatched `)`", p.span(), Some("no `(` before this".into())));
+        }
+        tok => return Err(p.error(format!("unexpected {}", tok.describe()), p.span(), None)),
+    }
+    match main {
+        Some(main) => Ok(Parsed { main, rules }),
+        None => {
+            let span = Span::new(0, src.trim_end().len());
+            Err(p
+                .error("nothing to find", span, Some("only rules here".into()))
+                .with_help("add `find` and the pattern to match after the rules"))
+        }
     }
 }
 
@@ -72,8 +123,42 @@ impl Parser<'_> {
         self.is_word("or") && self.peek_second() != &Tok::Colon
     }
 
+    /// `let` or `find` starting a statement. Followed by `:` they name a
+    /// capture.
+    fn at_statement(&self) -> bool {
+        (self.is_word("let") || self.is_word("find")) && self.peek_second() != &Tok::Colon
+    }
+
     fn at_seq_end(&self) -> bool {
-        matches!(self.peek(), Tok::Eof | Tok::RParen) || self.at_or()
+        matches!(self.peek(), Tok::Eof | Tok::RParen) || self.at_or() || self.at_statement()
+    }
+
+    /// `let name = expr`.
+    fn rule(&mut self) -> Result<Rule, Error> {
+        let let_span = self.bump().span;
+        let Tok::Word(name) = self.peek().clone() else {
+            return Err(self.error("expected a rule name after `let`", let_span, None));
+        };
+        let span = self.bump().span;
+        if KEYWORDS.contains(&name.as_str())
+            || VOCABULARY.contains(&name.as_str())
+            || RESERVED.contains(&name.as_str())
+            || Kind::from_name(&name).is_some()
+        {
+            let message = format!("`{name}` is a built-in word and can't name a rule");
+            return Err(self.error(message, span, None));
+        }
+        if self.peek() != &Tok::Equals {
+            let message = format!("expected `=` after `let {name}`");
+            return Err(self.error(message, let_span.to(span), None));
+        }
+        let equals = self.bump().span;
+        if self.at_seq_end() {
+            let message = format!("expected a pattern after `let {name} =`");
+            return Err(self.error(message, let_span.to(equals), None));
+        }
+        let body = self.expr()?;
+        Ok(Rule { name, span, body })
     }
 
     fn expr(&mut self) -> Result<Expr, Error> {
@@ -158,7 +243,7 @@ impl Parser<'_> {
                     },
                     "until" => ExprKind::Until(body),
                     "through" => ExprKind::Through(body),
-                    _ => body.fold_case().kind,
+                    _ => ExprKind::NoCase(body),
                 }
             }
             (_, Some("followed" | "not" | "after")) => self.look(start)?,
@@ -189,12 +274,6 @@ impl Parser<'_> {
         };
         let op_span = start.to(self.tokens[self.pos - 1].span);
         let body = self.operand(format!("expected a pattern after `{op}`"), op_span)?;
-        if behind && body.kind.fixed_len().is_none() {
-            let label = Some("this can match different numbers of characters".into());
-            return Err(self
-                .error("`after` needs a pattern with a fixed number of characters", body.span, label)
-                .with_help(r#"use exact counts like `3 digit` instead of `1+ digit`; `newline` can be one or two characters"#));
-        }
         Ok(ExprKind::Look {
             behind,
             negated,
@@ -262,7 +341,11 @@ impl Parser<'_> {
                 "line" | "text" | "word" => return self.anchor(&w, token.span),
                 w => match Kind::from_name(w) {
                     Some(kind) => ExprKind::Class(CharSet::kind(kind)),
-                    None => return Err(self.word_error(w, token.span)),
+                    None if RESERVED.contains(&w) => {
+                        let message = format!("`{w}` is reserved for a future version of sikt");
+                        return Err(self.error(message, token.span, None));
+                    }
+                    None => ExprKind::Rule(w.to_owned()),
                 },
             },
             tok => {
@@ -395,51 +478,6 @@ impl Parser<'_> {
         }
         Ok(())
     }
-
-    fn word_error(&self, word: &str, span: Span) -> Error {
-        if RESERVED.contains(&word) {
-            return self.error(
-                format!("`{word}` is reserved for a future version of sikt"),
-                span,
-                None,
-            );
-        }
-        if UNSUPPORTED.contains(&word) {
-            return self.error(format!("`{word}` isn't supported yet"), span, None);
-        }
-        let label = suggest(word).map(|s| format!("did you mean `{s}`?"));
-        self.error(format!("unknown word `{word}`"), span, label)
-            .with_help(format!("to match the text, quote it: \"{word}\""))
-    }
-}
-
-/// The closest known word within a small edit distance.
-fn suggest(word: &str) -> Option<&'static str> {
-    let kinds = Kind::ALL.iter().map(|k| k.name());
-    VOCABULARY
-        .iter()
-        .copied()
-        .chain(kinds)
-        .map(|candidate| (edit_distance(word, candidate), candidate))
-        .filter(|&(d, _)| d <= 2 && d < word.chars().count())
-        .min_by_key(|&(d, _)| d)
-        .map(|(_, candidate)| candidate)
-}
-
-fn edit_distance(a: &str, b: &str) -> usize {
-    let b: Vec<char> = b.chars().collect();
-    let mut row: Vec<usize> = (0..=b.len()).collect();
-    for (i, ca) in a.chars().enumerate() {
-        let mut prev = row[0];
-        row[0] = i + 1;
-        for (j, &cb) in b.iter().enumerate() {
-            let cost = usize::from(ca != cb);
-            let next = (row[j + 1] + 1).min(row[j] + 1).min(prev + cost);
-            prev = row[j + 1];
-            row[j + 1] = next;
-        }
-    }
-    row[b.len()]
 }
 
 #[cfg(test)]
@@ -467,6 +505,9 @@ mod tests {
             },
             ExprKind::Capture { name, body } => format!("{name}:({})", show(body)),
             ExprKind::Anchor(a) => format!("{a:?}"),
+            ExprKind::NoCase(x) => format!("nocase({})", show(x)),
+            ExprKind::Rule(name) => format!("rule {name}"),
+            ExprKind::Call { rule, .. } => format!("call {rule}"),
             ExprKind::Look {
                 behind,
                 negated,
@@ -483,7 +524,7 @@ mod tests {
     }
 
     fn ast(src: &str) -> String {
-        show(&parse(src).unwrap())
+        show(&parse(src).unwrap().main)
     }
 
     #[test]
@@ -517,15 +558,7 @@ mod tests {
 
     #[test]
     fn spans_cover_operands() {
-        let e = parse(r#"  n: 1+ digit"#).unwrap();
+        let e = parse(r#"  n: 1+ digit"#).unwrap().main;
         assert_eq!(e.span, Span::new(2, 13));
-    }
-
-    #[test]
-    fn suggestions() {
-        assert_eq!(suggest("digts"), Some("digit"));
-        assert_eq!(suggest("leter"), Some("letter"));
-        assert_eq!(suggest("xyzzy"), None);
-        assert_eq!(suggest("a"), None);
     }
 }

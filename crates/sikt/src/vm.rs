@@ -11,6 +11,15 @@ struct Frame {
     pc: usize,
     pos: usize,
     captures: usize,
+    /// A return address from [`Inst::Call`], skipped when backtracking.
+    call: bool,
+}
+
+/// Bounds on one match attempt.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Limits {
+    pub steps: u64,
+    pub depth: u32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -46,7 +55,7 @@ pub(crate) fn exec(
     hay: &[u8],
     start: usize,
     scratch: &mut Scratch,
-    max_steps: u64,
+    limits: Limits,
 ) -> Result<Option<usize>, MatchError> {
     let insts = &program.insts[..];
     let Scratch {
@@ -59,10 +68,13 @@ pub(crate) fn exec(
     let mut pc = 0;
     let mut pos = start;
     let mut steps = 0u64;
+    let mut depth = 0u32;
     loop {
         steps += 1;
-        if steps > max_steps {
-            return Err(MatchError::StepLimit { limit: max_steps });
+        if steps > limits.steps {
+            return Err(MatchError::StepLimit {
+                limit: limits.steps,
+            });
         }
         let ok = match insts[pc] {
             Inst::Any => {
@@ -142,6 +154,7 @@ pub(crate) fn exec(
                     pc: target,
                     pos,
                     captures: captures.len(),
+                    call: false,
                 });
                 true
             }
@@ -197,13 +210,41 @@ pub(crate) fn exec(
                 });
                 true
             }
+            Inst::Call(target) => {
+                depth += 1;
+                if depth > limits.depth {
+                    return Err(MatchError::DepthLimit {
+                        limit: limits.depth,
+                    });
+                }
+                stack.push(Frame {
+                    pc: pc + 1,
+                    pos,
+                    captures: captures.len(),
+                    call: true,
+                });
+                pc = target;
+                continue;
+            }
+            Inst::Return => {
+                let frame = stack.pop().expect("return without call");
+                debug_assert!(frame.call);
+                depth -= 1;
+                pc = frame.pc;
+                continue;
+            }
             Inst::Match => return Ok(Some(pos)),
         };
         if ok {
             pc += 1;
         } else {
-            let Some(frame) = stack.pop() else {
-                return Ok(None);
+            // Unwind to the latest choice, leaving the rules it was inside.
+            let frame = loop {
+                match stack.pop() {
+                    Some(frame) if frame.call => depth -= 1,
+                    Some(frame) => break frame,
+                    None => return Ok(None),
+                }
             };
             pc = frame.pc;
             pos = frame.pos;

@@ -65,7 +65,13 @@ impl Expr {
                 negated,
                 body: fold(body),
             },
+            ExprKind::Call { rule, nullable, .. } => ExprKind::Call {
+                rule,
+                nullable,
+                nocase: true,
+            },
             kind @ (ExprKind::Any | ExprKind::Newline | ExprKind::Anchor(_)) => kind,
+            ExprKind::NoCase(_) | ExprKind::Rule(_) => unreachable!("resolved before folding"),
         };
         Expr::new(kind, self.span)
     }
@@ -144,6 +150,17 @@ pub(crate) enum ExprKind {
     },
     Until(Box<Expr>),
     Through(Box<Expr>),
+    /// `nocase x`, lowered by resolving.
+    NoCase(Box<Expr>),
+    /// A reference to a `let` rule by name, replaced by resolving.
+    Rule(String),
+    /// A call to a recursive rule, by its index in [`Ast::rules`]. Other rules
+    /// are inlined.
+    Call {
+        rule: usize,
+        nullable: bool,
+        nocase: bool,
+    },
 }
 
 impl ExprKind {
@@ -153,7 +170,10 @@ impl ExprKind {
             ExprKind::Literal(s) => Some(s.chars().count()),
             ExprKind::Any | ExprKind::Class(_) => Some(1),
             ExprKind::Anchor(_) | ExprKind::Look { .. } => Some(0),
-            ExprKind::Newline | ExprKind::Until(_) | ExprKind::Through(_) => None,
+            ExprKind::Newline
+            | ExprKind::Until(_)
+            | ExprKind::Through(_)
+            | ExprKind::Call { .. } => None,
             ExprKind::Seq(items) => items.iter().map(|e| e.kind.fixed_len()).sum(),
             ExprKind::Choice(alts) => {
                 let first = alts[0].kind.fixed_len()?;
@@ -166,6 +186,7 @@ impl ExprKind {
                 _ => None,
             },
             ExprKind::Capture { body, .. } => body.kind.fixed_len(),
+            ExprKind::NoCase(_) | ExprKind::Rule(_) => unreachable!("resolved before analysis"),
         }
     }
 
@@ -180,6 +201,53 @@ impl ExprKind {
             ExprKind::Capture { body, .. } => body.kind.nullable(),
             ExprKind::Until(_) | ExprKind::Anchor(_) | ExprKind::Look { .. } => true,
             ExprKind::Through(x) => x.kind.nullable(),
+            ExprKind::Call { nullable, .. } => *nullable,
+            ExprKind::NoCase(_) | ExprKind::Rule(_) => unreachable!("resolved before analysis"),
         }
     }
+
+    pub fn children(&self) -> &[Expr] {
+        match self {
+            ExprKind::Seq(items) | ExprKind::Choice(items) => items,
+            ExprKind::Repeat { body, .. }
+            | ExprKind::Capture { body, .. }
+            | ExprKind::Look { body, .. }
+            | ExprKind::Until(body)
+            | ExprKind::Through(body)
+            | ExprKind::NoCase(body) => std::slice::from_ref(body),
+            ExprKind::Literal(_)
+            | ExprKind::Any
+            | ExprKind::Newline
+            | ExprKind::Class(_)
+            | ExprKind::Anchor(_)
+            | ExprKind::Rule(_)
+            | ExprKind::Call { .. } => &[],
+        }
+    }
+
+    pub fn children_mut(&mut self) -> &mut [Expr] {
+        match self {
+            ExprKind::Seq(items) | ExprKind::Choice(items) => items,
+            ExprKind::Repeat { body, .. }
+            | ExprKind::Capture { body, .. }
+            | ExprKind::Look { body, .. }
+            | ExprKind::Until(body)
+            | ExprKind::Through(body)
+            | ExprKind::NoCase(body) => std::slice::from_mut(body),
+            ExprKind::Literal(_)
+            | ExprKind::Any
+            | ExprKind::Newline
+            | ExprKind::Class(_)
+            | ExprKind::Anchor(_)
+            | ExprKind::Rule(_)
+            | ExprKind::Call { .. } => &mut [],
+        }
+    }
+}
+
+/// A resolved pattern: the main expression and the recursive rules it calls.
+#[derive(Debug, Clone)]
+pub(crate) struct Ast {
+    pub main: Expr,
+    pub rules: Vec<Expr>,
 }

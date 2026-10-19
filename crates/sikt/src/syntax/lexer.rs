@@ -12,6 +12,7 @@ pub(crate) enum Tok {
     Plus,
     DotDot,
     Colon,
+    Equals,
     LParen,
     RParen,
     Eof,
@@ -27,6 +28,7 @@ impl Tok {
             Tok::Plus => "`+`".into(),
             Tok::DotDot => "`..`".into(),
             Tok::Colon => "`:`".into(),
+            Tok::Equals => "`=`".into(),
             Tok::LParen => "`(`".into(),
             Tok::RParen => "`)`".into(),
             Tok::Eof => "the end of the pattern".into(),
@@ -57,12 +59,13 @@ pub(crate) fn lex(src: &str) -> Result<Vec<Token>, Error> {
                 continue;
             }
             '"' | '\'' => Tok::Str(string(src, &mut chars)?),
-            '(' | ')' | ':' | '+' => {
+            '(' | ')' | ':' | '=' | '+' => {
                 chars.next();
                 match c {
                     '(' => Tok::LParen,
                     ')' => Tok::RParen,
                     ':' => Tok::Colon,
+                    '=' => Tok::Equals,
                     _ => Tok::Plus,
                 }
             }

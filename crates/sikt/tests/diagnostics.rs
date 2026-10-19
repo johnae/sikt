@@ -42,3 +42,13 @@ fn loops_forever() {
 fn multiline_pattern() {
     insta::assert_snapshot!(render("year: 4 digit\n\"-\"\nmonth: 2 dgit"));
 }
+
+#[test]
+fn left_recursion() {
+    insta::assert_snapshot!(render("let sum = sum \"+\" digit or digit\nfind sum"));
+}
+
+#[test]
+fn unknown_rule() {
+    insta::assert_snapshot!(render("let octet = 1..3 digit\nfind octet \".\" octt"));
+}

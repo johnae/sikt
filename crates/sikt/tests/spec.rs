@@ -28,6 +28,7 @@ struct Case {
     error: Option<String>,
     label: Option<String>,
     max_steps: Option<u64>,
+    max_depth: Option<u32>,
     #[serde(default)]
     case_insensitive: bool,
     match_error: Option<String>,
@@ -85,6 +86,9 @@ fn run(case: &Case) -> Result<(), Failed> {
     let mut builder = Pattern::builder();
     if let Some(steps) = case.max_steps {
         builder = builder.max_steps(steps);
+    }
+    if let Some(depth) = case.max_depth {
+        builder = builder.max_depth(depth);
     }
     builder = builder.case_insensitive(case.case_insensitive);
     let compiled = builder.build(&case.pattern);

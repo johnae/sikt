@@ -6,9 +6,12 @@ use crate::compile::{Program, compile};
 use crate::error::{Error, MatchError};
 use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::syntax::parse;
-use crate::vm::{self, CaptureEvent, Scratch};
+use crate::vm::{self, CaptureEvent, Limits, Scratch};
 
-const DEFAULT_MAX_STEPS: u64 = 10_000_000;
+const DEFAULT_LIMITS: Limits = Limits {
+    steps: 10_000_000,
+    depth: 1_000,
+};
 
 /// A compiled pattern. Immutable, and cheap to share between threads.
 pub struct Pattern {
@@ -16,7 +19,7 @@ pub struct Pattern {
     program: Program,
     prefilter: Prefilter,
     leading_run: Option<LeadingRun>,
-    max_steps: u64,
+    limits: Limits,
 }
 
 impl fmt::Debug for Pattern {
@@ -28,7 +31,7 @@ impl fmt::Debug for Pattern {
 /// Configures a [`Pattern`] before compiling it.
 #[derive(Debug, Clone)]
 pub struct PatternBuilder {
-    max_steps: u64,
+    limits: Limits,
     case_insensitive: bool,
 }
 
@@ -36,7 +39,14 @@ impl PatternBuilder {
     /// VM steps allowed for one match attempt at one position. Exceeding it
     /// returns [`MatchError::StepLimit`].
     pub fn max_steps(mut self, steps: u64) -> Self {
-        self.max_steps = steps;
+        self.limits.steps = steps;
+        self
+    }
+
+    /// How deeply rules may call each other. Exceeding it returns
+    /// [`MatchError::DepthLimit`].
+    pub fn max_depth(mut self, depth: u32) -> Self {
+        self.limits.depth = depth;
         self
     }
 
@@ -48,17 +58,17 @@ impl PatternBuilder {
     }
 
     pub fn build(&self, source: &str) -> Result<Pattern, Error> {
-        let mut expr = parse(source)?;
+        let mut ast = parse(source)?;
         if self.case_insensitive {
-            expr = expr.fold_case();
+            ast.main = ast.main.fold_case();
         }
-        let program = compile(&expr, source)?;
+        let program = compile(&ast, source)?;
         Ok(Pattern {
             source: source.to_owned(),
             program,
-            prefilter: Prefilter::new(&expr),
-            leading_run: LeadingRun::new(&expr),
-            max_steps: self.max_steps,
+            prefilter: Prefilter::new(&ast.main),
+            leading_run: LeadingRun::new(&ast.main),
+            limits: self.limits,
         })
     }
 }
@@ -70,7 +80,7 @@ impl Pattern {
 
     pub fn builder() -> PatternBuilder {
         PatternBuilder {
-            max_steps: DEFAULT_MAX_STEPS,
+            limits: DEFAULT_LIMITS,
             case_insensitive: false,
         }
     }
@@ -144,13 +154,7 @@ impl<'a> Iterator for FindIter<'a> {
             } else {
                 1
             };
-            match vm::exec(
-                program,
-                hay,
-                start,
-                &mut self.scratch,
-                self.pattern.max_steps,
-            ) {
+            match vm::exec(program, hay, start, &mut self.scratch, self.pattern.limits) {
                 Err(e) => {
                     self.done = true;
                     return Some(Err(e));
@@ -281,7 +285,7 @@ mod tests {
             } else {
                 1
             };
-            match vm::exec(&p.program, hay, pos, &mut scratch, p.max_steps).unwrap() {
+            match vm::exec(&p.program, hay, pos, &mut scratch, p.limits).unwrap() {
                 Some(end) => {
                     out.push(pos..end);
                     pos = if end > pos { end } else { pos + step };

@@ -159,6 +159,8 @@ fn first_bytes(e: &Expr) -> (ByteSet, bool) {
             (set, nullable || *min == 0)
         }
         ExprKind::Capture { body, .. } => first_bytes(body),
+        ExprKind::Call { nullable, .. } => (ByteSet::full(), *nullable),
+        ExprKind::NoCase(_) | ExprKind::Rule(_) => unreachable!("resolved before analysis"),
     }
 }
 
@@ -298,7 +300,7 @@ mod tests {
     use crate::syntax::parse;
 
     fn prefilter(src: &str) -> String {
-        match Prefilter::new(&parse(src).unwrap()) {
+        match Prefilter::new(&parse(src).unwrap().main) {
             Prefilter::None => "none".into(),
             Prefilter::Byte(a) => format!("byte {:?}", a as char),
             Prefilter::Byte2(a, b) => format!("bytes {:?} {:?}", a as char, b as char),

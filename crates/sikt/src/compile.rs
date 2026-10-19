@@ -4,7 +4,7 @@ use memchr::memmem::Finder;
 
 use crate::class::CharSet;
 use crate::error::Error;
-use crate::syntax::{Anchor, Expr, ExprKind};
+use crate::syntax::{Anchor, Ast, Expr, ExprKind};
 
 /// Keeps patterns like `1000 (1000 "x")` from exhausting memory.
 const MAX_INSTS: usize = 1 << 20;
@@ -44,6 +44,10 @@ pub(crate) enum Inst {
     Behind(u32),
     Open(u32),
     Close(u32),
+    /// Pushes a return entry and jumps to a rule.
+    Call(usize),
+    /// Pops the return entry and jumps back.
+    Return,
     Match,
 }
 
@@ -57,9 +61,12 @@ pub(crate) struct Program {
     pub captures: Vec<String>,
 }
 
-pub(crate) fn compile(expr: &Expr, src: &str) -> Result<Program, Error> {
+pub(crate) fn compile(ast: &Ast, src: &str) -> Result<Program, Error> {
     let mut c = Compiler {
         src,
+        rules: &ast.rules,
+        variants: Vec::new(),
+        calls: Vec::new(),
         program: Program {
             insts: Vec::new(),
             literals: Vec::new(),
@@ -68,13 +75,33 @@ pub(crate) fn compile(expr: &Expr, src: &str) -> Result<Program, Error> {
             captures: Vec::new(),
         },
     };
-    c.expr(expr)?;
+    c.expr(&ast.main)?;
     c.push(Inst::Match);
+    // Compiling a rule can call further rules, adding variants as it goes.
+    let mut addrs = Vec::new();
+    while addrs.len() < c.variants.len() {
+        let (rule, nocase) = c.variants[addrs.len()];
+        addrs.push(c.here());
+        let mut body = c.rules[rule].clone();
+        if nocase {
+            body = body.fold_case();
+        }
+        c.expr(&body)?;
+        c.push(Inst::Return);
+    }
+    for (at, variant) in std::mem::take(&mut c.calls) {
+        c.program.insts[at] = Inst::Call(addrs[variant]);
+    }
     Ok(c.program)
 }
 
 struct Compiler<'s> {
     src: &'s str,
+    rules: &'s [Expr],
+    /// Each rule body to compile, as `(rule, nocase)`.
+    variants: Vec<(usize, bool)>,
+    /// Call instructions to point at their variant once it's compiled.
+    calls: Vec<(usize, usize)>,
     program: Program,
 }
 
@@ -182,6 +209,20 @@ impl Compiler<'_> {
                 negated,
                 body,
             } => self.look(*behind, *negated, body)?,
+            ExprKind::Call { rule, nocase, .. } => {
+                let key = (*rule, *nocase);
+                let variant = self
+                    .variants
+                    .iter()
+                    .position(|&v| v == key)
+                    .unwrap_or_else(|| {
+                        self.variants.push(key);
+                        self.variants.len() - 1
+                    });
+                let at = self.push(Inst::Call(0));
+                self.calls.push((at, variant));
+            }
+            ExprKind::NoCase(_) | ExprKind::Rule(_) => unreachable!("resolved before compiling"),
             ExprKind::Until(x) => self.until(x)?,
             ExprKind::Through(x) => {
                 self.until(x)?;
@@ -256,10 +297,16 @@ impl Compiler<'_> {
     fn look(&mut self, behind: bool, negated: bool, body: &Expr) -> Result<(), Error> {
         let choice = self.push(Inst::Choice(0));
         if behind {
-            let len = body
-                .kind
-                .fixed_len()
-                .expect("parser checks lookbehind length");
+            let Some(len) = body.kind.fixed_len() else {
+                let label = Some("this can match different numbers of characters".into());
+                return Err(Error::new(
+                    self.src,
+                    "`after` needs a pattern with a fixed number of characters",
+                    body.span,
+                    label,
+                )
+                .with_help("use exact counts like `3 digit` instead of `1+ digit`; `newline` can be one or two characters"));
+            };
             self.push(Inst::Behind(len as u32));
         }
         self.expr(body)?;

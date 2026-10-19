@@ -1,0 +1,169 @@
+[[case]]
+name = "rules then find"
+pattern = '''
+let octet = 1..3 digit
+find ip: (octet "." octet "." octet "." octet)
+'''
+input = "at 10.0.0.255 x"
+matches = [{ text = "10.0.0.255", captures = { ip = "10.0.0.255" } }]
+
+[[case]]
+name = "pattern first, rules after"
+pattern = 'pair ";" let pair = (letter digit)'
+input = "a1; b2"
+matches = ["a1;"]
+
+[[case]]
+name = "find without rules"
+pattern = 'find "a"'
+input = "ba"
+matches = ["a"]
+
+[[case]]
+name = "rules use rules"
+pattern = 'let d = digit let dd = d d find dd ":" dd'
+input = "12:34 1:2"
+matches = ["12:34"]
+
+[[case]]
+name = "a rule body is a whole expression"
+pattern = 'let sign = "+" or "-" find sign digit'
+input = "+1 -2 3"
+matches = ["+1", "-2"]
+
+[[case]]
+name = "keywords still name captures"
+pattern = 'let x = digit find let: x find: x'
+input = "12"
+matches = [{ text = "12", captures = { let = "1", find = "2" } }]
+
+[[case]]
+name = "recursive rule"
+pattern = '''
+let group = "(" 0+ (none of "()" or group) ")"
+find group
+'''
+input = "x (a(b)c) (d"
+matches = ["(a(b)c)"]
+
+[[case]]
+name = "recursion records every capture"
+pattern = '''
+let list = (n: 1+ digit) optional ("," list)
+find list
+'''
+input = "1,22,3"
+matches = [{ text = "1,22,3", captures = { n = ["1", "22", "3"] } }]
+
+[[case]]
+name = "mutual recursion"
+pattern = '''
+let a = "a" optional b
+let b = "b" optional a
+find a
+'''
+input = "ababa b"
+matches = ["ababa"]
+
+[[case]]
+name = "rule under nocase"
+pattern = 'let kw = "select" find nocase kw'
+input = "SELECT Select"
+matches = ["SELECT", "Select"]
+
+[[case]]
+name = "recursive rule under nocase"
+pattern = 'let as = "a" optional as find nocase as "!"'
+input = "aAa! a"
+matches = ["aAa!"]
+
+[[case]]
+name = "same rule with and without nocase"
+pattern = 'let as = "a" optional as find nocase as "-" as'
+input = "AA-aa AA-AA"
+matches = ["AA-aa"]
+
+[[case]]
+name = "rule in a lookbehind"
+pattern = 'let pair = 2 digit find after (pair ":") pair'
+input = "12:34"
+matches = ["34"]
+
+[[case]]
+name = "rule as a leading run"
+pattern = 'let num = 1+ digit find num "px"'
+input = "12 34px"
+matches = ["34px"]
+
+[[case]]
+name = "call depth limit"
+pattern = 'let g = "(" optional g ")" find g'
+input = "(((((((())))))))"
+max_depth = 5
+match_error = "pattern exceeded its call depth of 5"
+
+[[case]]
+name = "error: unknown rule with a suggestion"
+pattern = 'let octet = 3 digit find octt'
+error = "unknown word `octt`"
+label = "did you mean `octet`?"
+
+[[case]]
+name = "error: unknown word in a rule"
+pattern = 'let a = foo find a'
+error = "unknown word `foo`"
+
+[[case]]
+name = "error: rule defined twice"
+pattern = 'let a = "x" let a = "y" find a'
+error = "rule `a` is defined twice"
+
+[[case]]
+name = "error: rule named like a built-in word"
+pattern = 'let digit = "1" find digit'
+error = "`digit` is a built-in word and can't name a rule"
+
+[[case]]
+name = "error: left recursion"
+pattern = 'let sum = sum "+" digit or digit find sum'
+error = "rule `sum` is left-recursive"
+
+[[case]]
+name = "error: indirect left recursion"
+pattern = 'let a = b "x" let b = optional "y" a find a'
+error = "rule `a` is left-recursive"
+
+[[case]]
+name = "error: nothing to find"
+pattern = 'let a = "x"'
+error = "nothing to find"
+
+[[case]]
+name = "error: two patterns to find"
+pattern = '"a" find "b"'
+error = "the pattern to find is given twice"
+
+[[case]]
+name = "error: let needs a name"
+pattern = 'let = "x"'
+error = "expected a rule name after `let`"
+
+[[case]]
+name = "error: let needs ="
+pattern = 'let a "x"'
+error = "expected `=` after `let a`"
+
+[[case]]
+name = "error: rule needs a body"
+pattern = 'let a = find "x"'
+error = "expected a pattern after `let a =`"
+
+[[case]]
+name = "error: recursion loops forever"
+pattern = 'let a = optional "x" find 0+ a'
+error = "repetition would loop forever"
+
+[[case]]
+name = "error: lookbehind on a variable rule"
+pattern = 'let num = 1+ digit find after num "x"'
+error = "`after` needs a pattern with a fixed number of characters"

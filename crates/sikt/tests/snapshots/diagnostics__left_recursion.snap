@@ -1,0 +1,12 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render(\"let sum = sum \\\"+\\\" digit or digit\\nfind sum\")"
+---
+  × rule `sum` is left-recursive
+   ╭─[pattern:1:5]
+ 1 │ let sum = sum "+" digit or digit
+   ·     ─┬─
+   ·      ╰── calls itself before matching anything
+ 2 │ find sum
+   ╰────
+  help: match something before the recursive call, like `let list = item 0+ ("," item)`

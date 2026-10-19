@@ -101,4 +101,7 @@ pub enum MatchError {
     /// One attempt to match ran more VM steps than the pattern allows.
     #[error("pattern exceeded its step budget of {limit} steps")]
     StepLimit { limit: u64 },
+    /// Rules called each other more deeply than the pattern allows.
+    #[error("pattern exceeded its call depth of {limit}")]
+    DepthLimit { limit: u32 },
 }

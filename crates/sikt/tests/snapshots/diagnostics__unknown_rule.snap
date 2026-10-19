@@ -1,0 +1,12 @@
+---
+source: crates/sikt/tests/diagnostics.rs
+expression: "render(\"let octet = 1..3 digit\\nfind octet \\\".\\\" octt\")"
+---
+  × unknown word `octt`
+   ╭─[pattern:2:16]
+ 1 │ let octet = 1..3 digit
+ 2 │ find octet "." octt
+   ·                ──┬─
+   ·                  ╰── did you mean `octet`?
+   ╰────
+  help: to match the text, quote it: "octt"
