@@ -153,6 +153,7 @@ fn run(args: &Args) -> io::Result<ExitCode> {
         out: BufWriter::new(io::stdout().lock()),
         found: false,
         failed: false,
+        spans: Vec::new(),
     };
     if paths.is_empty() {
         let mut text = String::new();
@@ -195,6 +196,8 @@ struct Search<'a> {
     out: BufWriter<StdoutLock<'static>>,
     found: bool,
     failed: bool,
+    /// Where the matches in a text are, kept to reuse its memory.
+    spans: Vec<(usize, usize)>,
 }
 
 impl Search<'_> {
@@ -236,7 +239,9 @@ impl Search<'_> {
         let mut count = 0;
         // Line numbers count on from the previous match.
         let (mut counted, mut line) = (0, 1);
-        let mut spans = Vec::new();
+        // Reused from file to file.
+        let mut spans = std::mem::take(&mut self.spans);
+        spans.clear();
         let mut replaced = String::new();
         let mut replaced_up_to = 0;
         for m in program.find_iter(text) {
@@ -303,6 +308,7 @@ impl Search<'_> {
             }
         }
 
+        self.spans = spans;
         if count == 0 && args.explain {
             self.explain(text)?;
         }
@@ -348,17 +354,16 @@ impl Search<'_> {
             };
             number += memchr::memchr_iter(b'\n', &bytes[counted..line_start]).count();
             counted = line_start;
-            let hits: Vec<_> = spans[first..]
-                .iter()
-                .take_while(|&&(start, _)| start <= end)
-                .map(|&(start, stop)| {
-                    start.max(line_start) - line_start..stop.min(end) - line_start
-                })
-                .collect();
-            if !hits.is_empty() {
+            if start <= end {
+                let hits = spans[first..]
+                    .iter()
+                    .take_while(|&&(start, _)| start <= end)
+                    .map(|&(start, stop)| {
+                        start.max(line_start) - line_start..stop.min(end) - line_start
+                    });
                 self.lead(name, number)?;
                 self.style
-                    .highlight(&mut self.out, &text[line_start..end], &hits)?;
+                    .highlight(&mut self.out, &text[line_start..end], hits)?;
                 writeln!(self.out)?;
             }
             // Matches that end on this line are done; one that runs on

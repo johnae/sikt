@@ -1,6 +1,10 @@
 //! The backtracking VM. Repetition is possessive, so the backtrack stack only
 //! grows with nested choices, not with input length.
 
+use std::ops::Range;
+
+use smallvec::SmallVec;
+
 use crate::class::{Kind, char_len, decode, decode_last};
 use crate::compile::{Code, Inst};
 use crate::error::MatchError;
@@ -29,11 +33,17 @@ pub(crate) struct CaptureEvent {
     pub open: bool,
 }
 
+/// A match's captures as `(slot, range)`, in closing order. Most patterns have
+/// only a few, so they're kept inline without allocating.
+pub(crate) type Captures = SmallVec<[(u32, Range<usize>); 4]>;
+
 /// Per-search state, reused across attempts on one haystack.
 #[derive(Debug, Default)]
 pub(crate) struct Scratch {
     stack: Vec<Frame>,
     pub captures: Vec<CaptureEvent>,
+    /// Starts of the captures still open, while pairing events.
+    open: Vec<usize>,
     /// Per finder: the last search as `(from, found)`. Lets `until "x"` skip
     /// searching again from every start position.
     until: Vec<Option<(usize, Option<usize>)>>,
@@ -45,6 +55,22 @@ impl Scratch {
             until: vec![None; program.finders.len()],
             ..Scratch::default()
         }
+    }
+
+    /// Pairs the open and close events of the last match into captures, with
+    /// offsets moved by `base`.
+    pub fn capture_spans(&mut self, base: usize) -> Captures {
+        self.open.clear();
+        let mut out = Captures::new();
+        for event in &self.captures {
+            if event.open {
+                self.open.push(event.pos);
+            } else {
+                let start = self.open.pop().expect("captures are nested");
+                out.push((event.slot, base + start..base + event.pos));
+            }
+        }
+        out
     }
 
     /// Forgets what was learned about one haystack, before searching another.
@@ -130,6 +156,7 @@ fn run<T: Tracer>(
         stack,
         captures,
         until,
+        ..
     } = scratch;
     stack.clear();
     captures.clear();

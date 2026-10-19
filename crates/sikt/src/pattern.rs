@@ -11,7 +11,7 @@ use crate::prefilter::{LeadingRun, Prefilter, RunPlan};
 use crate::program::Program;
 use crate::syntax::{Ast, parse};
 use crate::template::Template;
-use crate::vm::{self, CaptureEvent, Limits, Scratch, Trace};
+use crate::vm::{self, Captures, Limits, Scratch, Trace};
 
 const DEFAULT_LIMITS: Limits = Limits {
     steps: 10_000_000,
@@ -370,7 +370,7 @@ impl<'a> FindIter<'a> {
                 }
                 Ok(Some(end)) => {
                     self.pos = base + if end > start { end } else { start + step };
-                    let captures = collect_captures(&self.scratch.captures, base);
+                    let captures = self.scratch.capture_spans(base);
                     return Some(Ok(Match {
                         pattern: self.pattern,
                         text: self.text,
@@ -419,29 +419,13 @@ impl<'a> FindIter<'a> {
     }
 }
 
-/// Pairs open and close events into `(slot, range)`, in closing order, with
-/// offsets moved by `base`.
-fn collect_captures(events: &[CaptureEvent], base: usize) -> Vec<(u32, Range<usize>)> {
-    let mut open = Vec::new();
-    let mut out = Vec::new();
-    for event in events {
-        if event.open {
-            open.push(event.pos);
-        } else {
-            let start = open.pop().expect("captures are nested");
-            out.push((event.slot, base + start..base + event.pos));
-        }
-    }
-    out
-}
-
 /// One match, with its named captures.
 #[derive(Clone)]
 pub struct Match<'a> {
     pattern: &'a Pattern,
     text: &'a str,
     range: Range<usize>,
-    captures: Vec<(u32, Range<usize>)>,
+    captures: Captures,
 }
 
 impl fmt::Debug for Match<'_> {

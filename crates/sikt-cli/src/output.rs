@@ -40,12 +40,12 @@ impl Style {
         self,
         out: &mut impl Write,
         line: &str,
-        ranges: &[Range<usize>],
+        ranges: impl Iterator<Item = Range<usize>>,
     ) -> io::Result<()> {
         let mut last = 0;
         for r in ranges {
             out.write_all(&line.as_bytes()[last..r.start])?;
-            self.matched(out, &line[r.clone()])?;
+            self.matched(out, &line[r.start..r.end])?;
             last = r.end;
         }
         out.write_all(&line.as_bytes()[last..])
