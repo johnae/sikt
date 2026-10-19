@@ -2,15 +2,19 @@
 //! match keeps a few captures inline.
 
 use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 struct Counting;
 
-static ALLOCATIONS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    /// Allocations on this thread only, so the test harness's other threads
+    /// don't count.
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
 
 unsafe impl GlobalAlloc for Counting {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        ALLOCATIONS.with(|count| count.set(count.get() + 1));
         unsafe { System.alloc(layout) }
     }
 
@@ -24,14 +28,14 @@ static GLOBAL: Counting = Counting;
 
 /// Allocations while finding every match in `text`.
 fn allocations(pattern: &sikt::Pattern, text: &str) -> usize {
-    let before = ALLOCATIONS.load(Ordering::Relaxed);
+    let before = ALLOCATIONS.with(Cell::get);
     let mut found = 0;
     for m in pattern.find_iter(text) {
         let m = m.unwrap();
         found += m.get("key").map_or(0, str::len) + m.get("value").map_or(0, str::len);
     }
     assert!(found > 0);
-    ALLOCATIONS.load(Ordering::Relaxed) - before
+    ALLOCATIONS.with(Cell::get) - before
 }
 
 #[test]
