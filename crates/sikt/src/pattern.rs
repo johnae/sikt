@@ -42,7 +42,7 @@ impl fmt::Debug for Pattern {
 #[derive(Debug, Clone)]
 pub struct PatternBuilder {
     limits: Limits,
-    case_insensitive: bool,
+    pub(crate) case_insensitive: bool,
     line_mode: bool,
 }
 
@@ -105,12 +105,22 @@ impl PatternBuilder {
     pub fn build_program(&self, source: &str) -> Result<Program, Error> {
         let (pattern, mut ast) = self.compile(source)?;
         let statements = std::mem::take(&mut ast.statements);
-        Program::from_parts(pattern, statements, &ast, source, self.case_insensitive)
+        Program::from_parts(pattern, statements, &ast, source, self)
     }
 
     fn compile(&self, source: &str) -> Result<(Pattern, Ast), Error> {
-        let mut ast = parse(source)?;
+        let ast = parse(source)?;
         let warnings = lint(&ast, source, self.line_mode);
+        self.compile_ast(ast, source, warnings)
+    }
+
+    /// Compiles a resolved pattern whose spans point into `source`.
+    pub(crate) fn compile_ast(
+        &self,
+        mut ast: Ast,
+        source: &str,
+        warnings: Vec<Warning>,
+    ) -> Result<(Pattern, Ast), Error> {
         if self.case_insensitive {
             ast.main = ast.main.fold_case();
         }
@@ -523,6 +533,14 @@ impl<'a, H: Haystack + ?Sized> Match<'a, H> {
     pub fn value(&self, name: &str) -> Option<Value<'a, H>> {
         let ty = self.pattern.capture_type(name)?;
         Some(ty.value(self.get(name)?))
+    }
+
+    /// Every capture of the pattern with its value, in order of first
+    /// appearance; `None` for one that didn't take part in this match.
+    pub fn values(&self) -> impl Iterator<Item = (&'a str, Option<Value<'a, H>>)> + '_ {
+        self.pattern
+            .capture_names()
+            .map(move |name| (name, self.value(name)))
     }
 
     /// Byte offsets of the last text captured under `name`.

@@ -1,4 +1,4 @@
-use super::ast::{Anchor, Cond, Expr, ExprKind, Output, Span, Statements, Test};
+use super::ast::{Anchor, Cond, Expr, ExprKind, Output, Span, Statements, TableSpec, Test};
 use super::lexer::{Tok, Token, lex};
 use crate::class::{CharSet, Kind};
 use crate::error::Error;
@@ -17,7 +17,7 @@ pub(super) const VOCABULARY: &[&str] = &[
 /// Words with a meaning of their own, which can't name a rule.
 const KEYWORDS: &[&str] = &[
     "or", "one", "none", "of", "followed", "by", "not", "after", "line", "text", "word", "start",
-    "end", "let", "find", "where", "replace", "print", "match",
+    "end", "let", "find", "where", "replace", "print", "table", "types", "with", "match",
 ];
 
 /// A `let` rule as written, before its references are resolved.
@@ -52,9 +52,25 @@ pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
     };
     let mut rules = Vec::new();
     let mut statements = Statements::default();
+    let mut types = Vec::new();
+    let mut types_at = None;
+    let mut with = Vec::new();
     loop {
         if p.is_word("let") {
             rules.push(p.rule()?);
+        } else if p.is_word("table") {
+            let keyword = p.bump().span;
+            if statements.table.is_some() {
+                return Err(p.error("a program has one `table`", keyword, None));
+            }
+            statements.table = Some(p.table(keyword)?);
+        } else if p.is_word("types") {
+            let keyword = p.bump().span;
+            types_at.get_or_insert(keyword);
+            types.extend(p.types(keyword)?);
+        } else if p.is_word("with") {
+            let keyword = p.bump().span;
+            with.push(p.with(keyword)?);
         } else if p.is_word("where") {
             let keyword = p.bump().span;
             if statements.filter.is_some() {
@@ -109,6 +125,36 @@ pub(crate) fn parse(src: &str) -> Result<Parsed, Error> {
             return Err(p.error("unmatched `)`", p.span(), Some("no `(` before this".into())));
         }
         tok => return Err(p.error(format!("unexpected {}", tok.describe()), p.span(), None)),
+    }
+    if let Some(table) = &mut statements.table {
+        if let Some(main) = &main {
+            return Err(p
+                .error("a table program has no `find`", main.span, None)
+                .with_help("the header says what each row holds"));
+        }
+        if let Some((keyword, output)) = &statements.output
+            && !output.print
+        {
+            return Err(p.error(
+                "`replace` doesn't work in a table program yet",
+                *keyword,
+                None,
+            ));
+        }
+        table.with = with;
+        table.types = types;
+        // Rows come from the header, so the pattern itself matches nothing.
+        let never = Expr::new(ExprKind::Literal(String::new()), table.span);
+        let kind = ExprKind::Look {
+            behind: false,
+            negated: true,
+            body: Box::new(never),
+        };
+        main = Some(Expr::new(kind, table.span));
+    } else if let Some(keyword) = types_at {
+        return Err(p.error("`types` only works with `table`", keyword, None));
+    } else if let Some((_, keyword, _)) = with.first() {
+        return Err(p.error("`with` only works with `table`", *keyword, None));
     }
     match main {
         Some(main) => Ok(Parsed {
@@ -168,9 +214,11 @@ impl Parser<'_> {
     /// `let` or `find` starting a statement. Followed by `:` they name a
     /// capture.
     fn at_statement(&self) -> bool {
-        ["let", "find", "where", "replace", "print"]
-            .iter()
-            .any(|w| self.is_word(w))
+        [
+            "let", "find", "where", "replace", "print", "table", "types", "with",
+        ]
+        .iter()
+        .any(|w| self.is_word(w))
             && self.peek_second() != &Tok::Colon
     }
 
@@ -312,6 +360,101 @@ impl Parser<'_> {
         }
         self.bump();
         Ok(strings)
+    }
+
+    /// `table`, with `split by (pattern)` and `columns (names)` after it.
+    fn table(&mut self, span: Span) -> Result<TableSpec, Error> {
+        let mut table = TableSpec {
+            span,
+            split: None,
+            columns: None,
+            types: Vec::new(),
+            with: Vec::new(),
+        };
+        loop {
+            if self.is_word("split") {
+                let split = self.bump().span;
+                if !self.is_word("by") {
+                    return Err(self.error("expected `by` after `split`", split, None));
+                }
+                let by = self.bump().span;
+                table.split =
+                    Some(self.operand("expected a pattern after `split by`".into(), split.to(by))?);
+            } else if self.is_word("columns") {
+                let columns = self.bump().span;
+                let help = "name the columns in parentheses, like `columns (fs size mount)`";
+                if self.peek() != &Tok::LParen {
+                    return Err(self
+                        .error("expected `(` after `columns`", columns, None)
+                        .with_help(help));
+                }
+                self.bump();
+                let mut names = Vec::new();
+                while let Tok::Word(name) = self.peek().clone() {
+                    self.bump();
+                    names.push(name);
+                }
+                if self.peek() != &Tok::RParen {
+                    let message = format!(
+                        "expected a column name or `)`, found {}",
+                        self.peek().describe()
+                    );
+                    return Err(self.error(message, self.span(), None).with_help(help));
+                }
+                self.bump();
+                table.columns = Some(names);
+            } else {
+                return Ok(table);
+            }
+        }
+    }
+
+    /// `types name type ...`, after the `types` at `span`.
+    fn types(&mut self, span: Span) -> Result<Vec<(String, Span, CaptureType)>, Error> {
+        let mut types = Vec::new();
+        while let Tok::Word(name) = self.peek().clone() {
+            if self.at_statement() {
+                break;
+            }
+            let name_span = self.bump().span;
+            let ty = match self.peek() {
+                Tok::Word(w) if w == "integer" => CaptureType::Integer,
+                Tok::Word(w) if w == "number" => CaptureType::Number,
+                Tok::Word(w) if w == "text" => CaptureType::Text,
+                _ => {
+                    let message = format!("expected a type after `{name}`");
+                    return Err(self
+                        .error(message, name_span, None)
+                        .with_help("types are integer, number and text"));
+                }
+            };
+            self.bump();
+            types.push((name, name_span, ty));
+        }
+        if types.is_empty() {
+            return Err(self
+                .error("expected a column and its type after `types`", span, None)
+                .with_help("write it like `types pid integer cpu number`"));
+        }
+        Ok(types)
+    }
+
+    /// `with name: pattern`, after the `with` at `span`.
+    fn with(&mut self, span: Span) -> Result<(String, Span, Expr), Error> {
+        let (Tok::Word(name), Tok::Colon) = (self.peek().clone(), self.peek_second().clone())
+        else {
+            return Err(self
+                .error("expected a column and `:` after `with`", span, None)
+                .with_help("write it like `with time: m: integer \":\" s: integer`"));
+        };
+        let name_span = self.bump().span;
+        let colon = self.bump().span;
+        if self.at_seq_end() {
+            let message = format!("expected a pattern after `with {name}:`");
+            return Err(self.error(message, span.to(colon), None));
+        }
+        let body = self.expr()?;
+        Ok((name, name_span, body))
     }
 
     /// `let name = expr`.

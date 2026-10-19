@@ -443,3 +443,77 @@ fn rows_are_just_the_captures() {
         "{\"user\":\"root\",\"pid\":1,\"cmd\":\"init\"}\n{\"pid\":42,\"cmd\":\"bash -l\"}\n"
     );
 }
+
+const PS: &str =
+    "    PID TTY      %CPU CMD\n      1 ?         0.5 init\n     22 pts/1     9.0 bash -l\n";
+
+#[test]
+fn table_rows() {
+    sikt()
+        .args(["--rows", "table types pid integer cpu number"])
+        .write_stdin(PS)
+        .assert()
+        .success()
+        .stdout(concat!(
+            "{\"pid\":1,\"tty\":\"?\",\"cpu\":0.5,\"cmd\":\"init\"}\n",
+            "{\"pid\":22,\"tty\":\"pts/1\",\"cpu\":9.0,\"cmd\":\"bash -l\"}\n",
+        ));
+}
+
+#[test]
+fn table_where_and_print() {
+    sikt()
+        .arg(r#"table types cpu number where cpu > 5 print "{pid} {cmd}""#)
+        .write_stdin(PS)
+        .assert()
+        .success()
+        .stdout("22 bash -l\n");
+}
+
+#[test]
+fn table_lines_keep_their_numbers() {
+    sikt()
+        .args(["-n", "table"])
+        .write_stdin(PS)
+        .assert()
+        .success()
+        .stdout(concat!(
+            "2:      1 ?         0.5 init\n",
+            "3:     22 pts/1     9.0 bash -l\n",
+        ));
+}
+
+#[test]
+fn table_reads_a_repeated_header_again() {
+    sikt()
+        .args(["--rows", "table"])
+        .write_stdin("A B\n1 2\n\nA B\n3 4\nC\n5\n")
+        .assert()
+        .success()
+        .stdout(
+            "{\"a\":\"1\",\"b\":\"2\"}\n{\"a\":\"3\",\"b\":\"4\"}\n{\"a\":\"C\"}\n{\"a\":\"5\"}\n",
+        );
+}
+
+#[test]
+fn each_file_has_its_own_header() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("a.txt"), "PID CMD\n1 init\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "CMD PID\nsh 2\n").unwrap();
+    sikt()
+        .current_dir(dir.path())
+        .args(["--rows", "table types pid integer", "a.txt", "b.txt"])
+        .assert()
+        .success()
+        .stdout("{\"pid\":1,\"cmd\":\"init\"}\n{\"cmd\":\"sh\",\"pid\":2}\n");
+}
+
+#[test]
+fn table_with_a_missing_column_fails() {
+    sikt()
+        .arg("table where cpu > 5")
+        .write_stdin("PID CMD\n1 init\n")
+        .assert()
+        .code(2)
+        .stderr(contains("unknown capture `cpu`"));
+}

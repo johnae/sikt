@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use super::ast::{Ast, Cond, Expr, ExprKind, Span};
+use super::ast::{Ast, Expr, ExprKind, Span, Statements};
 use super::parser::{Parsed, Rule, VOCABULARY};
 use crate::class::Kind;
 use crate::error::Error;
@@ -36,7 +36,7 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
     }
     let mut main_refs = Vec::new();
     check_names(src, &main, &index, &mut main_refs)?;
-    statements.filter = map_filter(statements.filter, &mut |e| {
+    statements = map_statements(statements, &mut |e| {
         check_names(src, &e, &index, &mut main_refs)?;
         Ok(e)
     })?;
@@ -61,7 +61,7 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
         .iter()
         .map(|&i| r.expand(&rules[i].body))
         .collect::<Result<Vec<_>, _>>()?;
-    statements.filter = map_filter(statements.filter, &mut |e| r.expand(&e))?;
+    statements = map_statements(statements, &mut |e| r.expand(&e))?;
 
     // Nullability of recursive rules, as a fixpoint from "not nullable".
     let mut nullable = vec![false; bodies.len()];
@@ -85,7 +85,7 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
         }
     }
 
-    statements.filter = map_filter(statements.filter, &mut |mut e| {
+    statements = map_statements(statements, &mut |mut e| {
         set_nullable(&mut e, &nullable);
         Ok(lower_nocase(e))
     })?;
@@ -97,14 +97,23 @@ pub(crate) fn resolve(src: &str, parsed: Parsed) -> Result<Ast, Error> {
     })
 }
 
-/// Applies `f` to every sub-pattern in a `where` condition.
-fn map_filter(
-    filter: Option<(Span, Cond)>,
+/// Applies `f` to every sub-pattern in the statements: in `where` conditions,
+/// `split by` and `with`.
+fn map_statements(
+    statements: Statements,
     f: &mut impl FnMut(Expr) -> Result<Expr, Error>,
-) -> Result<Option<(Span, Cond)>, Error> {
-    filter
-        .map(|(span, cond)| Ok((span, cond.try_map_exprs(f)?)))
-        .transpose()
+) -> Result<Statements, Error> {
+    Ok(Statements {
+        filter: statements
+            .filter
+            .map(|(span, cond)| Ok((span, cond.try_map_exprs(f)?)))
+            .transpose()?,
+        table: statements
+            .table
+            .map(|table| table.try_map_exprs(f))
+            .transpose()?,
+        ..statements
+    })
 }
 
 /// Checks that every word names a rule, collecting the rules referenced.

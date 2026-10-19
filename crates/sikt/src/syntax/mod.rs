@@ -5,7 +5,7 @@ mod lexer;
 mod parser;
 mod resolve;
 
-pub(crate) use ast::{Anchor, Ast, CmpOp, Cond, Expr, ExprKind, Span, Statements, Test};
+pub(crate) use ast::{Anchor, Ast, CmpOp, Cond, Expr, ExprKind, Span, Statements, TableSpec, Test};
 pub(crate) use resolve::suggest_from;
 
 pub(crate) fn parse(src: &str) -> Result<Ast, crate::error::Error> {

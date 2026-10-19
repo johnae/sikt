@@ -378,6 +378,40 @@ pub(crate) struct Output {
 pub(crate) struct Statements {
     pub filter: Option<(Span, Cond)>,
     pub output: Option<(Span, Output)>,
+    pub table: Option<TableSpec>,
+}
+
+/// `table` and the statements that go with it: `types` and `with`.
+#[derive(Debug, Clone)]
+pub(crate) struct TableSpec {
+    /// The `table` keyword.
+    pub span: Span,
+    /// `split by`: what separates columns. Whitespace without it.
+    pub split: Option<Expr>,
+    /// `columns (...)`: names that replace the header's.
+    pub columns: Option<Vec<String>>,
+    /// `types`: a column, where it's named, and its type.
+    pub types: Vec<(String, Span, CaptureType)>,
+    /// `with`: a column, where it's named, and the pattern to run on it.
+    pub with: Vec<(String, Span, Expr)>,
+}
+
+impl TableSpec {
+    /// Applies `f` to every sub-pattern.
+    pub fn try_map_exprs<E>(
+        self,
+        f: &mut impl FnMut(Expr) -> Result<Expr, E>,
+    ) -> Result<TableSpec, E> {
+        Ok(TableSpec {
+            split: self.split.map(&mut *f).transpose()?,
+            with: self
+                .with
+                .into_iter()
+                .map(|(name, span, e)| Ok((name, span, f(e)?)))
+                .collect::<Result<_, E>>()?,
+            ..self
+        })
+    }
 }
 
 /// A resolved pattern: the main expression and the recursive rules it calls.

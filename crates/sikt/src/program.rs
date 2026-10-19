@@ -3,10 +3,11 @@ use std::borrow::Cow;
 use crate::compile::{self, compile};
 use crate::error::{Error, MatchError, Warning};
 use crate::haystack::Haystack;
-use crate::pattern::{Match, Pattern, splice};
+use crate::pattern::{Match, Pattern, PatternBuilder, splice};
 use crate::syntax::{
     Anchor, Ast, CmpOp, Cond, Expr, ExprKind, Span, Statements, Test, suggest_from,
 };
+use crate::table::Table;
 use crate::template::Template;
 use crate::vm::{self, Scratch};
 
@@ -34,6 +35,7 @@ pub struct Program {
     output: Option<Template>,
     action: Action,
     case_insensitive: bool,
+    table: Option<Table>,
 }
 
 #[derive(Debug)]
@@ -66,8 +68,30 @@ impl Program {
         statements: Statements,
         ast: &Ast,
         source: &str,
-        case_insensitive: bool,
+        builder: &PatternBuilder,
     ) -> Result<Program, Error> {
+        let case_insensitive = builder.case_insensitive;
+        if let Some(spec) = statements.table {
+            // Checking `where` and the template waits for a header to name the
+            // columns; see [`Table::for_header`].
+            let action = match &statements.output {
+                Some((_, output)) if output.print => Action::Print,
+                _ => Action::Find,
+            };
+            let statements = Statements {
+                table: None,
+                ..statements
+            };
+            let table = Table::new(spec, statements, ast, source, builder);
+            return Ok(Program {
+                pattern,
+                filter: None,
+                output: None,
+                action,
+                case_insensitive,
+                table: Some(table),
+            });
+        }
         let names: Vec<&str> = pattern.capture_names().collect();
         let filter = match statements.filter {
             Some((_, cond)) => Some(check(cond, ast, &names, source, case_insensitive)?),
@@ -92,7 +116,14 @@ impl Program {
             output,
             action,
             case_insensitive,
+            table: None,
         })
+    }
+
+    /// For a `table` program, the table, which compiles a program for the rows
+    /// under each header. The table program itself matches nothing.
+    pub fn table(&self) -> Option<&Table> {
+        self.table.as_ref()
     }
 
     pub fn pattern(&self) -> &Pattern {

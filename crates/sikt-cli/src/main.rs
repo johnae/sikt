@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, ValueEnum};
 use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme};
-use sikt::{Action, Match, Program, Value};
+use sikt::{Action, Match, Program, Table, Value};
 
 use crate::output::{Style, quote};
 
@@ -153,6 +153,7 @@ fn run(args: &Args) -> io::Result<ExitCode> {
         style: Style {
             color: args.color.enabled(io::stdout().is_terminal()),
         },
+        stderr_color,
         prefix: paths.len() > 1 || paths.iter().any(|p| p.is_dir()),
         out: BufWriter::new(io::stdout().lock()),
         found: false,
@@ -194,6 +195,7 @@ struct Search<'a> {
     args: &'a Args,
     program: &'a Program,
     style: Style,
+    stderr_color: bool,
     /// Prefix output with file names, when searching more than one file.
     /// Without it there is one input, so `--explain` has a single text.
     prefix: bool,
@@ -230,36 +232,96 @@ impl Search<'_> {
     /// One input: stdin or a file's contents. Searching works on the bytes;
     /// only `print` and `replace` need the text to be UTF-8.
     fn input(&mut self, name: &str, path: Option<&Path>, bytes: &[u8]) -> io::Result<()> {
+        if let Some(table) = self.program.table() {
+            return self.table(table, name, bytes);
+        }
         if !self.needs_text() {
-            return self.search(name, bytes);
+            return self.search(self.program, name, bytes, Position { byte: 0, line: 1 });
         }
         match std::str::from_utf8(bytes) {
-            Ok(text) => self.transform(name, path, text),
+            Ok(text) => self.transform(self.program, name, path, text),
             Err(_) if self.program.action() == Action::Replace => {
                 eprintln!("sikt: skipping {name}: not valid UTF-8");
                 Ok(())
             }
-            Err(_) => self.transform(name, path, &String::from_utf8_lossy(bytes)),
+            Err(_) => self.transform(self.program, name, path, &String::from_utf8_lossy(bytes)),
         }
+    }
+
+    /// A `table` program's input: each header line starts a section of rows,
+    /// searched with the program for that header. A section ends where the
+    /// header comes again, as in concatenated output.
+    fn table(&mut self, table: &Table, name: &str, bytes: &[u8]) -> io::Result<()> {
+        // The line at `at`, without its newline, and where the next one starts.
+        let line = |at: Position| {
+            let end = memchr::memchr(b'\n', &bytes[at.byte..]).map_or(bytes.len(), |i| at.byte + i);
+            let next = Position {
+                byte: (end + 1).min(bytes.len()),
+                line: at.line + 1,
+            };
+            (&bytes[at.byte..end], next)
+        };
+        let mut at = Position { byte: 0, line: 1 };
+        while at.byte < bytes.len() {
+            let (header, rows_start) = line(at);
+            if header.trim_ascii().is_empty() {
+                at = rows_start;
+                continue;
+            }
+            let rows = match table.for_header(&String::from_utf8_lossy(header)) {
+                Ok(rows) => rows,
+                Err(e) => {
+                    report(&e, self.stderr_color);
+                    self.failed = true;
+                    return Ok(());
+                }
+            };
+            let mut stop = rows_start;
+            while stop.byte < bytes.len() {
+                let (row, next) = line(stop);
+                if row == header {
+                    break;
+                }
+                stop = next;
+            }
+            let section = &bytes[rows_start.byte..stop.byte];
+            if rows.action() == Action::Print && !self.reports_only() {
+                self.transform(&rows, name, None, &String::from_utf8_lossy(section))?;
+            } else {
+                self.search(&rows, name, section, rows_start)?;
+            }
+            at = stop;
+        }
+        Ok(())
     }
 
     /// Whether the input must be UTF-8 text: for `print` and `replace`, unless
     /// the output is only counts, names or JSON.
     fn needs_text(&self) -> bool {
+        self.program.action() != Action::Find && !self.reports_only()
+    }
+
+    /// The output is counts, names or JSON, never `print` or `replace`.
+    fn reports_only(&self) -> bool {
         let args = self.args;
-        self.program.action() != Action::Find
-            && !(args.files_with_matches || args.count || args.json || args.rows)
+        args.files_with_matches || args.count || args.json || args.rows
     }
 
     /// Finds the matches in `bytes` and reports them: matching lines, only
     /// the matches, counts, file names or JSON. Matches stream to the output
     /// as they're found.
-    fn search(&mut self, name: &str, bytes: &[u8]) -> io::Result<()> {
-        let (args, program) = (self.args, self.program);
+    fn search(
+        &mut self,
+        program: &Program,
+        name: &str,
+        bytes: &[u8],
+        at: Position,
+    ) -> io::Result<()> {
+        let args = self.args;
         let numbered = args.json || args.only_matching;
         let mut count = 0;
         // Line numbers count on from the previous match.
-        let (mut counted, mut line) = (0, 1);
+        let (mut counted, mut line) = (0, at.line);
         // Reused from file to file.
         let mut spans = std::mem::take(&mut self.spans);
         spans.clear();
@@ -283,9 +345,9 @@ impl Search<'_> {
                 counted = m.start();
             }
             if args.json {
-                self.json(name, line, &m)?;
+                self.json(name, line, at.byte, &m)?;
             } else if args.rows {
-                let row = serde_json::Value::Object(self.captures(&m, false));
+                let row = serde_json::Value::Object(captures(&m, false));
                 writeln!(self.out, "{row}")?;
             } else if args.only_matching {
                 self.lead(name, line)?;
@@ -311,7 +373,7 @@ impl Search<'_> {
                 writeln!(self.out, "{count}")?;
             }
         } else if !(args.json || args.rows || args.only_matching) {
-            self.matching_lines(name, bytes, &spans)?;
+            self.matching_lines(name, bytes, &spans, at.line)?;
         }
         self.spans = spans;
         if count == 0 && args.explain {
@@ -321,8 +383,13 @@ impl Search<'_> {
     }
 
     /// Runs `print` or `replace` over `text`.
-    fn transform(&mut self, name: &str, path: Option<&Path>, text: &str) -> io::Result<()> {
-        let program = self.program;
+    fn transform(
+        &mut self,
+        program: &Program,
+        name: &str,
+        path: Option<&Path>,
+        text: &str,
+    ) -> io::Result<()> {
         let mut count = 0;
         let mut replaced = String::new();
         let mut replaced_up_to = 0;
@@ -376,8 +443,9 @@ impl Search<'_> {
         name: &str,
         bytes: &[u8],
         spans: &[(usize, usize)],
+        first_line: usize,
     ) -> io::Result<()> {
-        let (mut counted, mut number) = (0, 1);
+        let (mut counted, mut number) = (0, first_line);
         let mut first = 0;
         let mut line_start = 0;
         while let Some(&(start, _)) = spans.get(first) {
@@ -421,40 +489,15 @@ impl Search<'_> {
         Ok(())
     }
 
-    /// The captures of `m` as JSON, typed. Captures that didn't take part are
-    /// `null` with `keep_missing`, otherwise left out.
-    fn captures(
-        &self,
-        m: &Match<[u8]>,
-        keep_missing: bool,
-    ) -> serde_json::Map<String, serde_json::Value> {
-        self.program
-            .pattern()
-            .capture_names()
-            .filter_map(|n| {
-                let value = match m.value(n) {
-                    None if keep_missing => serde_json::Value::Null,
-                    None => return None,
-                    Some(Value::Text(text)) => String::from_utf8_lossy(text).into(),
-                    Some(Value::Integer(i)) => i.into(),
-                    Some(Value::Number(x)) => {
-                        serde_json::Number::from_f64(x).map_or(serde_json::Value::Null, Into::into)
-                    }
-                };
-                Some((n.to_owned(), value))
-            })
-            .collect()
-    }
-
     /// Text that isn't valid UTF-8 gets replacement characters, since JSON
     /// strings must be Unicode.
-    fn json(&mut self, name: &str, line: usize, m: &Match<[u8]>) -> io::Result<()> {
-        let captures = self.captures(m, true);
+    fn json(&mut self, name: &str, line: usize, base: usize, m: &Match<[u8]>) -> io::Result<()> {
+        let captures = captures(m, true);
         let record = serde_json::json!({
             "path": name,
             "line": line,
-            "start": m.start(),
-            "end": m.end(),
+            "start": base + m.start(),
+            "end": base + m.end(),
             "text": String::from_utf8_lossy(m.as_bytes()),
             "captures": captures,
         });
@@ -490,6 +533,10 @@ impl Search<'_> {
     fn explain(&mut self, text: &str) -> io::Result<()> {
         if self.prefix {
             self.fail("--explain works on one input at a time");
+            return Ok(());
+        }
+        if self.program.table().is_some() {
+            self.fail("--explain doesn't work with `table` yet");
             return Ok(());
         }
         match self.program.pattern().explain(text) {
@@ -534,4 +581,30 @@ impl std::ops::Deref for Contents {
             Contents::Mapped(map) => map,
         }
     }
+}
+
+/// Where a text starts in its input: a byte offset and a 1-based line.
+#[derive(Debug, Clone, Copy)]
+struct Position {
+    byte: usize,
+    line: usize,
+}
+
+/// The captures of `m` as JSON, typed. Captures that didn't take part are
+/// `null` with `keep_missing`, otherwise left out.
+fn captures(m: &Match<[u8]>, keep_missing: bool) -> serde_json::Map<String, serde_json::Value> {
+    m.values()
+        .filter_map(|(name, value)| {
+            let value = match value {
+                None if keep_missing => serde_json::Value::Null,
+                None => return None,
+                Some(Value::Text(text)) => String::from_utf8_lossy(text).into(),
+                Some(Value::Integer(i)) => i.into(),
+                Some(Value::Number(x)) => {
+                    serde_json::Number::from_f64(x).map_or(serde_json::Value::Null, Into::into)
+                }
+            };
+            Some((name.to_owned(), value))
+        })
+        .collect()
 }
